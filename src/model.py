@@ -111,8 +111,8 @@ class RWKVBlock(nn.Module):
         L_padded = L + pad_size
         r, k, v, w, u = map(lambda x: x.reshape((L_padded // C, C, -1)), [r, k, v, w, u])
         
-        w_min = jnp.float32(10**(-76 / C))  
-        w = jax.lax.clamp(w_min, w, 1.0)
+        w_min = 0.005#jnp.float32(10**(-76 / C))  
+        w = jax.lax.clamp(w_min, w)
         w = jnp.log(w) 
         
         A = jnp.exp(jnp.cumsum(w, axis=1))
@@ -173,8 +173,8 @@ class RWKVBlock(nn.Module):
         time_decay_offset = time_decay_offset.reshape(B, T, H, S)
 
         w = jnp.exp(-jnp.exp(time_decay + time_decay_offset))
-        w_min = jnp.float32(10**(-76 / self.config.chunk_size))  # Using a safer value
-        w = jax.lax.clamp(w_min, w, 1.0)
+        w_min = 0.005 #jnp.float32(10**(-76 / self.config.chunk_size))  # Using a safer value
+        w = jax.lax.clamp(w_min, w)
 
         u = jnp.broadcast_to(self.time_faaaa, (B, T, H, S))
 
