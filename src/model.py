@@ -135,7 +135,7 @@ class RWKVBlock(nn.Module):
 
         def intra_chunk_fn(r_chunk, k_chunk, v_chunk, A_chunk, u_chunk):
             mid = C // 2
-            r_decay = r_chunk * jnp.exp(jnp.pad(A_chunk[:mid, :], ((mid, 0), (0, 0))) - A_chunk[mid:mid+1, :])
+            r_decay = r_chunk * jnp.exp(jnp.pad(A_chunk[:-1, :], ((1, 0), (0, 0))) - A_chunk[mid:mid+1, :])
             k_decay = k_chunk * jnp.exp(A_chunk[mid:mid+1, :] - A_chunk)
             u_diag = jnp.diag(jnp.sum(r_chunk * u_chunk * k_chunk, -1))
             return (jnp.tril(r_decay @ k_decay.T, -1) + u_diag) @ v_chunk
