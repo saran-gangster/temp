@@ -9,7 +9,13 @@ from dataclasses import dataclass
 
 
 def check_nan(x, name):
-    assert not jnp.isnan(x).any(), f"NaN found in {name}"
+    def raise_error(_):
+        raise ValueError(f"NaN found in {name}")
+    
+    def f(_):
+        pass
+    
+    lax.cond(jnp.isnan(x).any(), raise_error, f, operand=None)
     
 @dataclass(frozen=True)
 class RWKVConfig:
