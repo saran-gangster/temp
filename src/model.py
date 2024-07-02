@@ -76,8 +76,8 @@ class RWKVBlock(nn.Module):
             return (ratio_0_to_1 * (1 - (n / max(args.dim_att - 1, 1))) + ((n + 1) % 3 - 1) * 0.1).reshape((self.n_head, -1))
         self.time_faaaa = self.param('time_faaaa', init_time_faaaa, (self.n_head, self.head_size))
 
-        self.time_maa_w1 = self.param('time_maa_w1', nn.initializers.uniform(1e-4), (args.n_embd, 4*32))
-        self.time_maa_w2 = self.param('time_maa_w2', nn.initializers.uniform(1e-4), (4, 32, args.n_embd))
+        self.time_maa_w1 = self.param('time_maa_w1', nn.initializers.uniform(1e-4), (args.n_embd, 5*32))
+        self.time_maa_w2 = self.param('time_maa_w2', nn.initializers.uniform(1e-4), (5, 32, args.n_embd))
         self.time_decay_w1 = self.param('time_decay_w1', nn.initializers.uniform(1e-4), (args.n_embd, 64))
         self.time_decay_w2 = self.param('time_decay_w2', nn.initializers.uniform(1e-4), (64, args.n_embd))
 
