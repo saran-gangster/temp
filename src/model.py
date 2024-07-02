@@ -49,6 +49,7 @@ class RWKVBlock(nn.Module):
         args = self.config
         self.head_size = args.head_size_a
         self.n_head = args.dim_att // self.head_size
+        self.min_clamp = args.min_clamp
         assert args.dim_att % self.n_head == 0
 
         ratio_0_to_1 = self.layer_id / (args.n_layer - 1)
@@ -112,7 +113,7 @@ class RWKVBlock(nn.Module):
         r, k, v, w, u = map(lambda x: x.reshape((L_padded // C, C, -1)), [r, k, v, w, u])
         
         w_min = jnp.float32(10**(-70 / C))  
-        w = jax.lax.clamp(0.005, w, 1.0)
+        w = jax.lax.clamp(self.min_clamp, w, 1.0)
         w = jnp.log(w) 
         
         A = jnp.exp(jnp.cumsum(w, axis=1))
@@ -174,7 +175,7 @@ class RWKVBlock(nn.Module):
 
         w = jnp.exp(-jnp.exp(time_decay + time_decay_offset))
         w_min = jnp.float32(10**(-70 / self.config.chunk_size))
-        w = jax.lax.clamp(0.005, w, 1.0)
+        w = jax.lax.clamp(self.min_clamp, w, 1.0)
         w = jnp.log(w)
 
         u = jnp.broadcast_to(self.time_faaaa, (B, T, H, S))
@@ -271,7 +272,8 @@ if __name__ == "__main__":
         dropout=0.1,
         layer_norm_epsilon=1e-5,
         chunk_size=64, 
-        subchunk_size=32
+        subchunk_size=32,
+        min_clamp = 0.01
     )
 
     model, params = create_model(config)
