@@ -21,6 +21,7 @@ class RWKVConfig:
     layer_norm_epsilon: float
     chunk_size: int
     subchunk_size: int
+    min_clamp: int
 
 class GroupNorm(nn.Module):
     num_groups: int
