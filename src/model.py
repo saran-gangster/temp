@@ -175,6 +175,7 @@ class RWKVBlock(nn.Module):
         w = jnp.exp(-jnp.exp(time_decay + time_decay_offset))
         w_min = jnp.float32(10**(-70 / self.config.chunk_size))
         w = jax.lax.clamp(w_min, w, 1.0)
+        w = jnp.log(w)
 
         u = jnp.broadcast_to(self.time_faaaa, (B, T, H, S))
 
