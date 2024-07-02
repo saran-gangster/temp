@@ -7,6 +7,10 @@ from typing import Any
 from functools import partial
 from dataclasses import dataclass
 
+
+def check_nan(x, name):
+    assert not jnp.isnan(x).any(), f"NaN found in {name}"
+    
 @dataclass(frozen=True)
 class RWKVConfig:
     vocab_size: int
@@ -35,7 +39,9 @@ class GroupNorm(nn.Module):
         x = x.reshape(-1, self.num_groups, x.shape[-1] // self.num_groups)
         mean = jnp.mean(x, axis=(0, 2), keepdims=True)
         var = jnp.var(x, axis=(0, 2), keepdims=True)
+        check_nan(var, 'GroupNorm var')
         x = ((x - mean) / jnp.sqrt(var + self.epsilon)).reshape(orig_shape)
+        check_nan(x, 'GroupNorm x normalized')
         if self.use_scale:
             x *= self.param('scale', nn.initializers.ones, (x.shape[-1],))
         if self.use_bias:
@@ -99,7 +105,9 @@ class RWKVBlock(nn.Module):
         self.ln2 = nn.LayerNorm(epsilon=self.config.layer_norm_epsilon)
 
     def time_shift(self, x):
-        return jnp.pad(x[:, :-1], ((0, 0), (1, 0), (0, 0)))
+        shifted = jnp.pad(x[:, :-1], ((0, 0), (1, 0), (0, 0)))
+        check_nan(shifted, 'time_shift')
+        return shifted
 
     @partial(jax.vmap, in_axes=(None, 0, 0, 0, 0, 0, 0))
     def chunkwise(self, k, v, r, w, u, state):
@@ -115,9 +123,11 @@ class RWKVBlock(nn.Module):
         
         w_min = jnp.float32(10**(-70 / C))  
         w = jax.lax.clamp(self.min_clamp, w, 1.0)
-        w = jnp.log(w) 
+        w = jnp.log(w)
+        check_nan(w, 'chunkwise w')
         
         A = jnp.exp(jnp.cumsum(w, axis=1))
+        check_nan(A, 'chunkwise A')
         A_inter = jnp.exp(jax.lax.cumsum(w, axis=1, reverse=True) - w)
         A_intra = jnp.cumsum(w, axis=1)
         kv = jnp.einsum('nij,nik->nijk', A_inter * k, v)
@@ -166,9 +176,13 @@ class RWKVBlock(nn.Module):
         xg = x + sx * (self.time_maa_g + mg)
 
         r = self.receptance(xr).reshape(B, T, H, S)
+        check_nan(r, 'time_mixing r')
         k = self.key(xk).reshape(B, T, H, S)
+        check_nan(k, 'time_mixing k')
         v = self.value(xv).reshape(B, T, H, S)
+        check_nan(v, 'time_mixing v')
         g = jnn.silu(self.gate(xg))
+        check_nan(v, 'time_mixing g')
 
         time_decay = self.time_decay.reshape(1, 1, H, S)
         time_decay_offset = jnn.tanh(xw @ self.time_decay_w1) @ self.time_decay_w2
@@ -203,7 +217,9 @@ class RWKVBlock(nn.Module):
         xr = x + sx * self.time_maa_r_channel
 
         k = jax.nn.relu(self.key_channel(xk)) ** 2
+        check_nan(k, 'channel_mixing k')
         kv = self.value_channel(k)
+        check_nan(kv, 'channel_mixing kv')
         return jax.nn.sigmoid(self.receptance_channel(xr)) * kv
 
     def __call__(self, x, state, deterministic=True):
