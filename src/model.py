@@ -66,7 +66,7 @@ class RWKVBlock(nn.Module):
         self.time_maa_r = init_time_maa('time_maa_r', 0.5 * ratio_1_to_almost0)
         self.time_maa_g = init_time_maa('time_maa_g', 0.5 * ratio_1_to_almost0)
         def init_time_decay(key, shape):
-            return (-6 + 5 * (jnp.arange(args.dim_att) / (args.dim_att - 1)) ** (0.7 + 1.3 * ratio_0_to_1))[None]
+            return (-6 + 5 * (jnp.arange(args.dim_att) / (args.dim_att - 1)) ** (0.7 + 1.3 * ratio_0_to_1))
         self.time_decay = self.param('time_decay', init_time_decay, (1, args.dim_att))
 
         def init_time_faaaa(key, shape):
@@ -111,8 +111,8 @@ class RWKVBlock(nn.Module):
         L_padded = L + pad_size
         r, k, v, w, u = map(lambda x: x.reshape((L_padded // C, C, -1)), [r, k, v, w, u])
         
-        w_min = 0.005#jnp.float32(10**(-76 / C))  
-        w = jax.lax.clamp(w_min, w)
+        w_min = jnp.float32(10**(-76 / C))  
+        w = jax.lax.clamp(w_min, w, 1.0)
         w = jnp.log(w) 
         
         A = jnp.exp(jnp.cumsum(w, axis=1))
@@ -173,8 +173,8 @@ class RWKVBlock(nn.Module):
         time_decay_offset = time_decay_offset.reshape(B, T, H, S)
 
         w = jnp.exp(-jnp.exp(time_decay + time_decay_offset))
-        w_min = 0.005 #jnp.float32(10**(-76 / self.config.chunk_size))  # Using a safer value
-        w = jax.lax.clamp(w_min, w)
+        w_min = jnp.float32(10**(-76 / self.config.chunk_size))
+        w = jax.lax.clamp(w_min, w, 1.0)
 
         u = jnp.broadcast_to(self.time_faaaa, (B, T, H, S))
 
