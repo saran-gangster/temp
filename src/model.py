@@ -15,7 +15,7 @@ def check_nan(x, name):
     def f(_):
         pass
     
-    lax.cond(jnp.isnan(x).any(), raise_error, f, operand=None)
+    jax.lax.cond(jnp.isnan(x).any(), raise_error, f, operand=None)
     
 @dataclass(frozen=True)
 class RWKVConfig:
