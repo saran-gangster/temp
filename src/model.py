@@ -111,7 +111,7 @@ class RWKVBlock(nn.Module):
         self.ln2 = nn.LayerNorm(epsilon=self.config.layer_norm_epsilon)
 
     def time_shift(self, x):
-        shifted = jnp.pad(x[:, :-1], ((0, 0), (1, 0), (0, 0)))
+        shifted, _ = jnp.concatenate((x[:, -1:, :], x[:, :-1, :]), axis=1), x[:, -1, :]
         check_nan(shifted, 'time_shift')
         return shifted
 
