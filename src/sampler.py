@@ -5,6 +5,7 @@ import jax.lax as lax
 from functools import partial
 from typing import Dict, Any, Optional, Tuple
 from src.tokenizer import RWKVTokenizer
+from src.model import RWKV
 
 def sample_logits(logits: jnp.ndarray, temperature: float = 1.0, top_p: float = 0.8) -> jnp.ndarray:
     if top_p == 0.0:
