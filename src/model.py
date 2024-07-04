@@ -275,13 +275,13 @@ def create_model(config):
     model = RWKV(config)
     key = random.PRNGKey(0)
     dummy_input = jnp.zeros((1, 16), dtype=jnp.int32)
+    dummy_state = RWKV.get_init_state(config, 1)
 
-    @jax.jit
-    def init_fn(key):
-        dummy_state = RWKV.get_init_state(config, 1)
-        return model.init(key, dummy_input, dummy_state)
-
-    params = init_fn(key)
+    with jax.disable_jit():
+        params = model.init(key, dummy_input, dummy_state)
+    
+    print(model.tabulate(key, dummy_input, dummy_state, console_kwargs={'width': 120}))
+    
     return model, params
 
 @partial(jax.jit, static_argnums=(0,))
