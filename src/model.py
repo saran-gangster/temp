@@ -245,7 +245,18 @@ class RWKV(nn.Module):
 
     @nn.compact
     def __call__(self, idx, state, deterministic=False):
-        assert jnp.all((idx >= 0) & (idx < self.config.vocab_size)), "Input indices out of range"
+        def errorfn(_):
+            raise ValueError("Input indices out of range")
+        
+        def identityfn(x):
+            return x
+        
+        idx = jax.lax.cond(
+            jnp.logical_or(jnp.any(idx < 0), jnp.any(idx >= self.config.vocab_size)),
+            error_fn,
+            identity_fn,
+            idx
+        )
         x = nn.Embed(num_embeddings=self.config.vocab_size, features=self.config.n_embd,embedding_init=nn.initializers.normal(stddev=0.01))(idx)
         check_nan(x, 'Embed x')
 
