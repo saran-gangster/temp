@@ -133,9 +133,15 @@ def find_latest_checkpoint(checkpoint_dir):
     return os.path.join(checkpoint_dir, latest_checkpoint)
 
 dataset = MMapIndexedDataset(DATA_PATH)
-print(f"Dataset length: {len(dataset)}")
-print(f"First 10 tokens: {dataset[:10]}")
-print(f"Last 10 tokens: {dataset[-10:]}")
+def preprocess_data(text, tokenizer, max_length):
+    encoded_data = tokenizer.encode(text)[0]
+    if len(encoded_data) > max_length:
+        encoded_data = encoded_data[:max_length]
+    elif len(encoded_data) < max_length:
+        encoded_data = encoded_data + [0] * (max_length - len(encoded_data))
+    return jnp.array(encoded_data)
+
+preprocessed_data = preprocess_data(dataset, tokenizer, SEQ_LEN)
 
 def pad_sequences(sequences, max_len, pad_value=0):
     padded = []
