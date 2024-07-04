@@ -245,7 +245,8 @@ class RWKV(nn.Module):
 
     @nn.compact
     def __call__(self, idx, state, deterministic=False):
-        x = nn.Embed(num_embeddings=self.config.vocab_size, features=self.config.n_embd)(idx)
+        assert jnp.all((idx >= 0) & (idx < self.config.vocab_size)), "Input indices out of range"
+        x = nn.Embed(num_embeddings=self.config.vocab_size, features=self.config.n_embd,embedding_init=nn.initializers.normal(stddev=0.01))(idx)
         check_nan(x, 'Embed x')
 
         new_states = []
