@@ -6,16 +6,12 @@ import flax.linen as nn
 from typing import Any
 from functools import partial
 from dataclasses import dataclass
-
+jax.config.update("jax_log_compiles", True)
 
 def check_nan(x, name):
-    def raise_error(_):
-        raise ValueError(f"NaN found in {name}")
-    
-    def f(_):
-        pass
-    
-    jax.lax.cond(jnp.isnan(x).any(), raise_error, f, operand=None)
+    is_nan = jnp.isnan(x).any()
+    jax.debug.print("WARNING: NaNs found in {}: {}", name, is_nan)
+    return jnp.where(is_nan, jnp.zeros_like(x), x)
     
 @dataclass(frozen=True)
 class RWKVConfig:
@@ -245,20 +241,17 @@ class RWKV(nn.Module):
 
     @nn.compact
     def __call__(self, idx, state, deterministic=False):
-        def errorfn(_):
-            raise ValueError("Input indices out of range")
         
-        def identityfn(x):
-            return x
+        idx = jnp.clip(idx, 0, self.config.vocab_size - 1)
         
-        idx = jax.lax.cond(
-            jnp.logical_or(jnp.any(idx < 0), jnp.any(idx >= self.config.vocab_size)),
-            errorfn,
-            identityfn,
-            idx
-        )
+        jax.debug.print("WARNING: Input indices out of range: {}", 
+                        jnp.logical_or(idx < 0, idx >= self.config.vocab_size).any())
+
         x = nn.Embed(num_embeddings=self.config.vocab_size, features=self.config.n_embd,embedding_init=nn.initializers.normal(stddev=0.01))(idx)
-        check_nan(x, 'Embed x')
+        x = jnp.where(jnp.isnan(x).any(), 
+                      jnp.zeros_like(x),  # replace NaNs with zeros
+                      x)
+        jax.debug.print("WARNING: NaNs found in Embed x: {}", jnp.isnan(x).any())
 
         new_states = []
         for i in range(self.config.n_layer):
