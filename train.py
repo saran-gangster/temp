@@ -12,8 +12,7 @@ from src.model import RWKV, RWKVConfig, create_model
 from src.tokenizer import RWKVTokenizer
 from src.binidx import MMapIndexedDataset
 
-
-MODEL_PATH = './weight/RWKV-x060.pkl'
+MODEL_PATH = './weight/RWKV-x060.rwkv'
 TOKENIZER_PATH = "rwkv_vocab_v20230424.txt"
 DATA_PATH = 'data/minipile'
 SAVE_PATH = os.path.abspath("rwkv")
@@ -41,10 +40,26 @@ tokenizer = RWKVTokenizer(TOKENIZER_PATH)
 
 def init_or_load_model(config, model_path):
     if os.path.exists(model_path):
+        print(f"Loading model from {model_path}")
         with open(model_path, 'rb') as f:
-            params = pickle.load(f)
+            loaded_data = pickle.load(f)
+        
+        if isinstance(loaded_data, dict) and 'params' in loaded_data:
+            params = loaded_data['params']
+        else:
+            params = loaded_data
+        
         model, _ = create_model(config)
+        
+        def reshape_params(loaded_param, expected_param):
+            if loaded_param.shape != expected_param.shape:
+                if len(loaded_param.shape) == 2 and loaded_param.shape[0] != config.vocab_size:
+                    return loaded_param[:config.vocab_size]
+            return loaded_param
+
+        params = jax.tree_map(reshape_params, params, model.params)
     else:
+        print("Creating new model")
         model, params = create_model(config)
         with open(model_path, 'wb') as f:
             pickle.dump(params, f)
@@ -53,17 +68,24 @@ def init_or_load_model(config, model_path):
 model, params = init_or_load_model(config, MODEL_PATH)
 
 def load_checkpoint(checkpoint_path):
+    print(f"Loading checkpoint from {checkpoint_path}")
     with open(checkpoint_path, 'rb') as f:
         checkpoint = pickle.load(f)
+    print(f"Checkpoint loaded, step: {checkpoint['step']}, epoch: {checkpoint['epoch']}")
     return checkpoint
 
-def save_checkpoint(train_state, step, save_dir):
+def save_checkpoint(train_state, step, epoch, save_dir):
     os.makedirs(save_dir, exist_ok=True)
-    checkpoint_file = os.path.join(save_dir, "checkpoint")
+    checkpoint_file = os.path.join(save_dir, f"checkpoint_{step}.rwkv")
     raw_params = jax.device_get(train_state.params)
-    checkpoint = {'params': raw_params, 'step': step}
+    checkpoint = {
+        'params': raw_params,
+        'step': step,
+        'epoch': epoch
+    }
     with open(checkpoint_file, 'wb') as f:
         pickle.dump(checkpoint, f)
+    print(f"Checkpoint saved at step {step}, epoch {epoch}")
 
 def create_learning_rate_schedule():
     def schedule(step):
@@ -85,12 +107,14 @@ def create_train_state(params, learning_rate_schedule):
 def find_latest_checkpoint(checkpoint_dir):
     if not os.path.exists(checkpoint_dir):
         return None
-    checkpoints = [d for d in os.listdir(checkpoint_dir) if d.startswith('checkpoint_')]
+    checkpoints = [f for f in os.listdir(checkpoint_dir) if f.startswith('checkpoint_') and f.endswith('.rwkv')]
     if not checkpoints:
         return None
+    
     def extract_step(checkpoint_name):
-        match = re.search(r'checkpoint_(\d+)', checkpoint_name)
+        match = re.search(r'checkpoint_(\d+)\.rwkv', checkpoint_name)
         return int(match.group(1)) if match else -1
+    
     latest_checkpoint = max(checkpoints, key=extract_step)
     return os.path.join(checkpoint_dir, latest_checkpoint)
 
@@ -141,10 +165,6 @@ def train_step(state, batch, mask, init_state, dropout_rng):
     max_grad = jax.lax.pmean(jnp.max(jnp.abs(jax.tree_util.tree_leaves(grads)[0])), axis_name='batch')
     return new_state, loss, new_state, max_grad, jnp.isnan(loss).any(), new_dropout_rng
 
-def check_tokenized_data(sequences):
-    flat_sequences = sequences.reshape(-1)
-    min_token, max_token = np.min(flat_sequences), np.max(flat_sequences)
-    unique_tokens = np.unique(flat_sequences)
 
 def train():
     global global_step
@@ -193,7 +213,6 @@ def train():
             sequences = [dataset[start_idx + i*SEQ_LEN : start_idx + (i+1)*SEQ_LEN] for i in range(BATCH_SIZE)]
 
             padded_sequences = pad_sequences(sequences, SEQ_LEN)
-            check_tokenized_data(padded_sequences)
             mask = create_mask(padded_sequences, SEQ_LEN)
 
             padded_sequences = padded_sequences.reshape(num_devices, BATCH_SIZE_PER_DEVICE, SEQ_LEN)
@@ -223,12 +242,7 @@ def train():
                     print(f"\nEpoch {current_epoch+1}/{EPOCHS}, Step {global_step}/{total_steps}, Loss: {mean_loss:.4f}, Max gradient: {max_grad:.4f}")
 
             if global_step % SAVE_EVERY == 0:
-                save_dir = os.path.join(SAVE_PATH, f"checkpoint_{global_step}")
-                os.makedirs(save_dir, exist_ok=True)
-                flat_params = jax.tree_util.tree_map(lambda x: x[0], jax.device_get(train_state.params))
-                checkpoint_file = os.path.join(save_dir, "checkpoint")
-                with open(checkpoint_file, 'wb') as f:
-                    pickle.dump({'params': flat_params, 'step': global_step, 'epoch': current_epoch}, f)
+                save_checkpoint(train_state, global_step, current_epoch, SAVE_PATH)
 
             if global_step % steps_per_epoch == 0:
                 current_epoch += 1
@@ -236,12 +250,12 @@ def train():
 
             pbar.set_description(f"Training (Epoch {current_epoch+1}/{EPOCHS})")
 
-    final_save_dir = os.path.join(SAVE_PATH, "checkpoint_final")
-    os.makedirs(final_save_dir, exist_ok=True)
-    flat_params = jax.tree_util.tree_map(lambda x: x.reshape(-1, *x.shape[2:]) if x.ndim > 2 else x, jax.device_get(train_state.params))
-    final_checkpoint_file = os.path.join(final_save_dir, "checkpoint")
-    with open(final_checkpoint_file, 'wb') as f:
-        pickle.dump({'params': flat_params, 'step': global_step, 'epoch': current_epoch}, f)
+            if global_step == total_steps:
+                current_epoch += 1
+            if not current_epoch == EPOCHS:
+                continue
+
+    save_checkpoint(train_state, global_step, current_epoch, SAVE_PATH)
 
 if __name__ == "__main__":
     train()
