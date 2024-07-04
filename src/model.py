@@ -8,9 +8,12 @@ from functools import partial
 from dataclasses import dataclass
 jax.config.update("jax_log_compiles", True)
 
-def check_nan(x, name):
+DEBUG_EMBED = 0
+DEBUG_BLOCK = 1
+
+def check_nan(x, debug_code):
     is_nan = jnp.isnan(x).any()
-    jax.debug.print("WARNING: NaNs found in {}: {}", name, is_nan)
+    jax.debug.print("WARNING: NaNs found in {}: {}", debug_code, is_nan)
     return jnp.where(is_nan, jnp.zeros_like(x), x)
     
 @dataclass(frozen=True)
@@ -241,22 +244,20 @@ class RWKV(nn.Module):
 
     @nn.compact
     def __call__(self, idx, state, deterministic=False):
-        
         idx = jnp.clip(idx, 0, self.config.vocab_size - 1)
         
         jax.debug.print("WARNING: Input indices out of range: {}", 
                         jnp.logical_or(idx < 0, idx >= self.config.vocab_size).any())
 
-        x = nn.Embed(num_embeddings=self.config.vocab_size, features=self.config.n_embd,embedding_init=nn.initializers.normal(stddev=0.01))(idx)
-        x = jnp.where(jnp.isnan(x).any(), 
-                      jnp.zeros_like(x),  # replace NaNs with zeros
-                      x)
-        jax.debug.print("WARNING: NaNs found in Embed x: {}", jnp.isnan(x).any())
+        x = nn.Embed(num_embeddings=self.config.vocab_size, 
+                     features=self.config.n_embd,
+                     embedding_init=nn.initializers.normal(stddev=0.01))(idx)
+        x = check_nan(x, DEBUG_EMBED)
 
         new_states = []
         for i in range(self.config.n_layer):
             block = RWKVBlock(self.config, i)
-            check_nan(x, 'in loop x')
+            x = check_nan(x, DEBUG_BLOCK)
             x, new_state = block(x, state[:, i], deterministic=deterministic)
             new_states.append(new_state)
 
@@ -269,7 +270,7 @@ class RWKV(nn.Module):
     @classmethod
     def get_init_state(cls, config, batch_size):
         return jnp.zeros((batch_size, config.n_layer, config.n_head, config.head_size_a, config.head_size_a))
-
+        
 def create_model(config):
     model = RWKV(config)
     key = random.PRNGKey(0)
