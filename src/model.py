@@ -271,14 +271,17 @@ class RWKV(nn.Module):
         
 def create_model(config):
     model = RWKV(config)
-    key = random.PRNGKey(0)
+    key = jax.random.PRNGKey(0)
     dummy_input = jnp.zeros((1, 16), dtype=jnp.int32)
     dummy_state = RWKV.get_init_state(config, 1)
 
+    params_key, dropout_key = jax.random.split(key)
+    rngs = {'params': params_key, 'dropout': dropout_key}
+
     with jax.disable_jit():
-        params = model.init(key, dummy_input, dummy_state)
+        params = model.init(rngs, dummy_input, dummy_state, deterministic=False)
     
-    print(model.tabulate(key, dummy_input, dummy_state, console_kwargs={'width': 120}))
+    print(model.tabulate(rngs, dummy_input, dummy_state, deterministic=False, console_kwargs={'width': 120}))
     
     return model, params
 
