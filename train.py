@@ -163,9 +163,15 @@ def compute_loss(logits, labels, mask):
     return loss
 
 @partial(jax.pmap, axis_name='batch')
-def train_step(state, batch, mask, init_state):
+def train_step(state, batch, mask, init_state, dropout_rng):
+    dropout_rng, new_dropout_rng = jax.random.split(dropout_rng)
+
     def loss_fn(params):
-        logits, new_state = state.apply_fn(params, batch[:, :-1], init_state)
+        logits, new_state = state.apply_fn(
+            params, batch[:, :-1], init_state, 
+            deterministic=False, 
+            rngs={'dropout': dropout_rng}
+        )
         loss = compute_loss(logits, batch[:, 1:], mask[:, 1:])
         return loss, (logits, new_state)
 
@@ -182,7 +188,7 @@ def train_step(state, batch, mask, init_state):
     
     new_state = state.apply_gradients(grads=grads)
     max_grad = jax.lax.pmean(jnp.max(jnp.abs(jax.tree_util.tree_leaves(grads)[0])), axis_name='batch')
-    return new_state, loss, new_state, max_grad, is_nan
+    return new_state, loss, new_state, max_grad, is_nan, new_dropout_rng
 
 def train():
     global global_step
@@ -218,9 +224,11 @@ def train():
     dummy_mask = jnp.ones((num_devices, BATCH_SIZE_PER_DEVICE, SEQ_LEN), dtype=jnp.int32)
     dummy_init_state = RWKV.get_init_state(config, BATCH_SIZE_PER_DEVICE)
     dummy_init_state = jnp.repeat(dummy_init_state[jnp.newaxis, ...], num_devices, axis=0)
-
+    dropout_rng = jax.random.PRNGKey(0)
+    dropout_rng = jax.random.split(dropout_rng, num_devices)
+    
     print("Compiling training step...")
-    train_step(train_state, dummy_batch, dummy_mask, dummy_init_state)
+    train_state, _, _, _, _, dropout_rng = train_step(train_state, dummy_batch, dummy_mask, dummy_init_state, dropout_rng)
     print("Compilation done.")
 
     total_steps = (len(dataset) // (BATCH_SIZE * SEQ_LEN)) * EPOCHS
@@ -246,7 +254,7 @@ def train():
                 init_state = RWKV.get_init_state(config, BATCH_SIZE_PER_DEVICE)
                 init_state = jnp.repeat(init_state[jnp.newaxis, ...], num_devices, axis=0)
 
-                train_state, loss, _, max_grad, is_nan = train_step(train_state, padded_sequences, mask, init_state)
+                train_state, loss, _, max_grad, is_nan, dropout_rng = train_step(train_state, padded_sequences, mask, init_state, dropout_rng)
                 
                 global_step += 1
                 pbar.update(1)
