@@ -178,17 +178,13 @@ def train_step(state, batch, mask, init_state, dropout_rng):
     grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
     (loss, (logits, new_state)), grads = grad_fn(state.params)
     
-    # Check for NaN values
-    is_nan = jnp.isnan(loss).any()
-    
-    # Replace NaN gradients with zeros
-    grads = jax.tree_map(lambda g: jnp.where(jnp.isnan(g), jnp.zeros_like(g), g), grads)
+    grads = jax.tree_util.tree_map(lambda g: jnp.where(jnp.isnan(g), jnp.zeros_like(g), g), grads)
     
     grads = jax.lax.pmean(grads, axis_name='batch')
     
     new_state = state.apply_gradients(grads=grads)
     max_grad = jax.lax.pmean(jnp.max(jnp.abs(jax.tree_util.tree_leaves(grads)[0])), axis_name='batch')
-    return new_state, loss, new_state, max_grad, is_nan, new_dropout_rng
+    return new_state, loss, new_state, max_grad, jnp.isnan(loss).any(), new_dropout_rng
 
 def train():
     global global_step
