@@ -223,7 +223,7 @@ class RWKVBlock(nn.Module):
         kv = self.value_channel(k)
         return jax.nn.sigmoid(self.receptance_channel(xr)) * kv
 
-    def __call__(self, x, state, deterministic=False):
+    def __call__(self, x, state, deterministic=False, rngs=None):
         x_attn, new_state = self.time_mixing(self.ln1(x), state)
         x = x + x_attn
         x = check_nan(x, DEBUG_TIME_MIXING)
@@ -232,7 +232,7 @@ class RWKVBlock(nn.Module):
         x = check_nan(x, DEBUG_CHANNEL_MIXING)
 
         if not deterministic:
-            x = self.dropout(x, deterministic=deterministic)
+            x = self.dropout(x, deterministic=deterministic, rng=rngs['dropout'] if rngs is not None else None)
 
         return x, new_state
 
@@ -256,7 +256,7 @@ class RWKV(nn.Module):
         for i in range(self.config.n_layer):
             block = RWKVBlock(self.config, i)
             x = check_nan(x, DEBUG_BLOCK)
-            x, new_state = block(x, state[:, i], deterministic=deterministic)
+            x, new_state = block(x, state[:, i], deterministic=deterministic, rngs=rngs)
             new_states.append(new_state)
 
         x = nn.LayerNorm(epsilon=self.config.layer_norm_epsilon)(x)
