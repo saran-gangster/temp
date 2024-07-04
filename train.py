@@ -55,15 +55,29 @@ def init_or_load_model(config, model_path):
         dummy_state = RWKV.get_init_state(config, 1)
         init_rngs = {'params': jax.random.PRNGKey(0), 'dropout': jax.random.PRNGKey(1)}
         
+        # Initialize the model to get the expected parameter structure
         _, initial_params = model.init_with_output(init_rngs, dummy_input, dummy_state, deterministic=False)
         
+        print("Loaded parameter structure:")
+        print(jax.tree_util.tree_map(lambda x: x.shape if hasattr(x, 'shape') else x, params))
+        
+        print("\nExpected parameter structure:")
+        print(jax.tree_util.tree_map(lambda x: x.shape if hasattr(x, 'shape') else x, initial_params))
+        
         def reshape_params(loaded_param, expected_param):
-            if loaded_param.shape != expected_param.shape:
-                if len(loaded_param.shape) == 2 and loaded_param.shape[0] != config.vocab_size:
-                    return loaded_param[:config.vocab_size]
+            if hasattr(loaded_param, 'shape') and hasattr(expected_param, 'shape'):
+                if loaded_param.shape != expected_param.shape:
+                    if len(loaded_param.shape) == 2 and loaded_param.shape[0] != config.vocab_size:
+                        return loaded_param[:config.vocab_size]
             return loaded_param
 
-        params = jax.tree_util.tree_map(reshape_params, params, initial_params)
+        try:
+            params = jax.tree_util.tree_map(reshape_params, params, initial_params)
+        except ValueError as e:
+            print(f"Error during parameter reshaping: {e}")
+            print("Loaded parameter keys:", jax.tree_util.tree_structure(params))
+            print("Expected parameter keys:", jax.tree_util.tree_structure(initial_params))
+            raise
     else:
         print("Creating new model")
         dummy_input = jnp.zeros((1, 16), dtype=jnp.int32)
