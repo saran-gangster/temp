@@ -148,6 +148,10 @@ def check_tokenized_data(sequences):
 
 def train():
     global global_step
+    total_tokens = len(dataset)
+    tokens_per_step = BATCH_SIZE * SEQ_LEN
+    steps_per_epoch = total_tokens // tokens_per_step
+    total_steps = steps_per_epoch * EPOCHS
     
     latest_checkpoint = find_latest_checkpoint(SAVE_PATH)
     if latest_checkpoint:
@@ -179,11 +183,6 @@ def train():
     dropout_rng = jax.random.split(dropout_rng, num_devices)
     
     train_state, _, _, _, _, dropout_rng = train_step(train_state, dummy_batch, dummy_mask, dummy_init_state, dropout_rng)
-
-    total_tokens = len(dataset)
-    tokens_per_step = BATCH_SIZE * SEQ_LEN
-    steps_per_epoch = total_tokens // tokens_per_step
-    total_steps = steps_per_epoch * EPOCHS
 
     with tqdm(total=total_steps, desc="Training") as pbar:
         while current_epoch < EPOCHS:
