@@ -72,11 +72,11 @@ def init_or_load_model(config, model_path):
             return loaded_param
 
         try:
-            params = jax.tree_util.tree_map(reshape_params, params, initial_params)
+            params = jax.tree_util.tree_map(reshape_params, params, initial_params['params'])
         except ValueError as e:
             print(f"Error during parameter reshaping: {e}")
             print("Loaded parameter keys:", jax.tree_util.tree_structure(params))
-            print("Expected parameter keys:", jax.tree_util.tree_structure(initial_params))
+            print("Expected parameter keys:", jax.tree_util.tree_structure(initial_params['params']))
             raise
     else:
         print("Creating new model")
@@ -84,8 +84,8 @@ def init_or_load_model(config, model_path):
         dummy_state = RWKV.get_init_state(config, 1)
         init_rngs = {'params': jax.random.PRNGKey(0), 'dropout': jax.random.PRNGKey(1)}
         _, params = model.init_with_output(init_rngs, dummy_input, dummy_state, deterministic=False)
-        with open(model_path, 'wb') as f:
-            pickle.dump(params, f)
+        params = params['params']  
+        
     return model, params
 
 model, params = init_or_load_model(config, MODEL_PATH)
