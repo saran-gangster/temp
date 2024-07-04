@@ -132,10 +132,10 @@ class RWKVBlock(nn.Module):
         w_min = jnp.float32(10**(-70 / C))  
         w = jax.lax.clamp(self.min_clamp, w, 1.0)
         w = jnp.log(w)
-        check_nan(w, 'chunkwise w')
+        
         
         A = jnp.exp(jnp.cumsum(w, axis=1))
-        check_nan(A, 'chunkwise A')
+        
         A_inter = jnp.exp(jax.lax.cumsum(w, axis=1, reverse=True) - w)
         A_intra = jnp.cumsum(w, axis=1)
         kv = jnp.einsum('nij,nik->nijk', A_inter * k, v)
