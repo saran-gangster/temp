@@ -148,6 +148,7 @@ def check_tokenized_data(sequences):
 
 def train():
     global global_step
+    
     latest_checkpoint = find_latest_checkpoint(SAVE_PATH)
     if latest_checkpoint:
         checkpoint_file = os.path.join(latest_checkpoint, "checkpoint")
@@ -156,14 +157,17 @@ def train():
             learning_rate_schedule = create_learning_rate_schedule()
             train_state = create_train_state(loaded_state['params'], learning_rate_schedule)
             global_step = loaded_state['step']
+            current_epoch = global_step // steps_per_epoch
         else:
             learning_rate_schedule = create_learning_rate_schedule()
             train_state = create_train_state(params, learning_rate_schedule)
             global_step = 0
+            current_epoch = 0
     else:
         learning_rate_schedule = create_learning_rate_schedule()
         train_state = create_train_state(params, learning_rate_schedule)
         global_step = 0
+        current_epoch = 0
     
     train_state = jax.device_put_replicated(train_state, devices)
 
@@ -176,28 +180,38 @@ def train():
     
     train_state, _, _, _, _, dropout_rng = train_step(train_state, dummy_batch, dummy_mask, dummy_init_state, dropout_rng)
 
-    total_steps = (len(dataset) // (BATCH_SIZE * SEQ_LEN)) * EPOCHS
-    steps_per_epoch = len(dataset) // (BATCH_SIZE * SEQ_LEN)
+    total_tokens = len(dataset)
+    tokens_per_step = BATCH_SIZE * SEQ_LEN
+    steps_per_epoch = total_tokens // tokens_per_step
+    total_steps = steps_per_epoch * EPOCHS
 
     with tqdm(total=total_steps, desc="Training") as pbar:
-        for step in range(total_steps):
-            epoch = step // steps_per_epoch
-            rng = jax.random.PRNGKey(step)
-            idxs = jax.random.randint(rng, (BATCH_SIZE,), 0, len(dataset) - SEQ_LEN)
-            sequences = [dataset[idx:idx+SEQ_LEN] for idx in idxs]
+        while current_epoch < EPOCHS:
+            rng = jax.random.PRNGKey(global_step)
+            
+            max_start_idx = total_tokens - SEQ_LEN * BATCH_SIZE
+            start_idx = jax.random.randint(rng, (1,), 0, max_start_idx)[0]
+            sequences = [dataset[start_idx + i*SEQ_LEN : start_idx + (i+1)*SEQ_LEN] for i in range(BATCH_SIZE)]
+
             padded_sequences = pad_sequences(sequences, SEQ_LEN)
             check_tokenized_data(padded_sequences)
             mask = create_mask(padded_sequences, SEQ_LEN)
+
             padded_sequences = padded_sequences.reshape(num_devices, BATCH_SIZE_PER_DEVICE, SEQ_LEN)
             mask = mask.reshape(num_devices, BATCH_SIZE_PER_DEVICE, SEQ_LEN)
+
             padded_sequences, mask = jnp.array(padded_sequences), jnp.array(mask)
+
             init_state = RWKV.get_init_state(config, BATCH_SIZE_PER_DEVICE)
             init_state = jnp.repeat(init_state[jnp.newaxis, ...], num_devices, axis=0)
+
             train_state, loss, _, max_grad, is_nan, dropout_rng = train_step(
                 train_state, padded_sequences, mask, init_state, dropout_rng
             )
+
             global_step += 1
             pbar.update(1)
+
             if global_step % 100 == 0:
                 loss = jax.device_get(loss)
                 mean_loss, max_grad = np.mean(loss), np.max(jax.device_get(max_grad))
@@ -207,21 +221,28 @@ def train():
                 elif np.isinf(mean_loss):
                     print(f"\nWarning: Inf loss detected at step {global_step}")
                 else:
-                    print(f"\nStep {global_step}, Loss: {mean_loss:.4f}, Max gradient: {max_grad:.4f}")
+                    print(f"\nEpoch {current_epoch+1}/{EPOCHS}, Step {global_step}/{total_steps}, Loss: {mean_loss:.4f}, Max gradient: {max_grad:.4f}")
+
             if global_step % SAVE_EVERY == 0:
                 save_dir = os.path.join(SAVE_PATH, f"checkpoint_{global_step}")
                 os.makedirs(save_dir, exist_ok=True)
                 flat_params = jax.tree_util.tree_map(lambda x: x[0], jax.device_get(train_state.params))
                 checkpoint_file = os.path.join(save_dir, "checkpoint")
                 with open(checkpoint_file, 'wb') as f:
-                    pickle.dump({'params': flat_params, 'step': global_step}, f)
+                    pickle.dump({'params': flat_params, 'step': global_step, 'epoch': current_epoch}, f)
+
+            if global_step % steps_per_epoch == 0:
+                current_epoch += 1
+                print(f"\nCompleted epoch {current_epoch")
+
+            pbar.set_description(f"Training (Epoch {current_epoch+1}/{EPOCHS})")
 
     final_save_dir = os.path.join(SAVE_PATH, "checkpoint_final")
     os.makedirs(final_save_dir, exist_ok=True)
     flat_params = jax.tree_util.tree_map(lambda x: x.reshape(-1, *x.shape[2:]) if x.ndim > 2 else x, jax.device_get(train_state.params))
     final_checkpoint_file = os.path.join(final_save_dir, "checkpoint")
     with open(final_checkpoint_file, 'wb') as f:
-        pickle.dump({'params': flat_params, 'step': global_step}, f)
+        pickle.dump({'params': flat_params, 'step': global_step, 'epoch': current_epoch}, f)
 
 if __name__ == "__main__":
     train()
