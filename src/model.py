@@ -235,9 +235,10 @@ class RWKVBlock(nn.Module):
         x = x + self.channel_mixing(self.ln2(x))
 
         if not deterministic:
-            x = nn.Dropout(rate=self.config.dropout, deterministic=deterministic)(x)
+            x = nn.Dropout(rate=self.config.dropout)(x, deterministic=deterministic)
 
         return x, new_state
+
 
 class RWKV(nn.Module):
     config: RWKVConfig
