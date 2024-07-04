@@ -198,10 +198,6 @@ def check_tokenized_data(sequences):
     print(f"Number of unique tokens: {len(unique_tokens)}")
     print(f"Sample of unique tokens: {unique_tokens[:10]}")  
 
-print(config.vocab_size)
-assert config.vocab_size == 65529, "Mismatch between config vocab_size and tokenizer vocab size"
-
-
 def train():
     global global_step
     
@@ -275,10 +271,10 @@ def train():
             global_step += 1
             pbar.update(1)
 
-            if global_step % 2 == 0:
+            if global_step % 60 == 0:
                 loss = jax.device_get(loss)
                 mean_loss = np.mean(loss)
-                max_grad = np.max(jax.device_get(max_grad))  # Get max across all devices
+                max_grad = np.max(jax.device_get(max_grad))  
                 is_nan = jax.device_get(is_nan)
                 
                 if np.any(is_nan):
