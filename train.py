@@ -6,16 +6,17 @@ import optax
 from flax.training import train_state
 import numpy as np
 from tqdm import tqdm
-import pickle
 from functools import partial
 from src.model import RWKV, RWKVConfig, create_model
 from src.tokenizer import RWKVTokenizer
 from src.binidx import MMapIndexedDataset
+import orbax.checkpoint
+from flax.training import orbax_utils
 
 MODEL_PATH = './weight/RWKV-x060.rwkv'
 TOKENIZER_PATH = "rwkv_vocab_v20230424.txt"
 DATA_PATH = 'data/minipile'
-SAVE_PATH = os.path.abspath("rwkv")
+SAVE_PATH = os.path.abspath("rwkv_checkpoints")
 
 config = RWKVConfig(
     vocab_size=65529, n_layer=2, n_embd=128, dim_att=128, dim_ffn=512,
@@ -38,77 +39,11 @@ assert BATCH_SIZE % num_devices == 0, f"Batch size must be divisible by the numb
 
 tokenizer = RWKVTokenizer(TOKENIZER_PATH)
 
-def init_or_load_model(config, model_path):
-    model = RWKV(config)
-    if os.path.exists(model_path):
-        print(f"Loading model from {model_path}")
-        with open(model_path, 'rb') as f:
-            loaded_data = pickle.load(f)
-        
-        if isinstance(loaded_data, dict) and 'params' in loaded_data:
-            params = loaded_data['params']
-        else:
-            params = loaded_data
-        
-        # Create a dummy input to initialize the model
-        dummy_input = jnp.zeros((1, 16), dtype=jnp.int32)
-        dummy_state = RWKV.get_init_state(config, 1)
-        init_rngs = {'params': jax.random.PRNGKey(0), 'dropout': jax.random.PRNGKey(1)}
-        
-        # Initialize the model to get the expected parameter structure
-        _, initial_params = model.init_with_output(init_rngs, dummy_input, dummy_state, deterministic=False)
-        
-        print("Loaded parameter structure:")
-        print(jax.tree_util.tree_map(lambda x: x.shape if hasattr(x, 'shape') else x, params))
-        
-        print("\nExpected parameter structure:")
-        print(jax.tree_util.tree_map(lambda x: x.shape if hasattr(x, 'shape') else x, initial_params))
-        
-        def reshape_params(loaded_param, expected_param):
-            if hasattr(loaded_param, 'shape') and hasattr(expected_param, 'shape'):
-                if loaded_param.shape != expected_param.shape:
-                    if len(loaded_param.shape) == 2 and loaded_param.shape[0] != config.vocab_size:
-                        return loaded_param[:config.vocab_size]
-            return loaded_param
-
-        try:
-            params = jax.tree_util.tree_map(reshape_params, params, initial_params['params'])
-        except ValueError as e:
-            print(f"Error during parameter reshaping: {e}")
-            print("Loaded parameter keys:", jax.tree_util.tree_structure(params))
-            print("Expected parameter keys:", jax.tree_util.tree_structure(initial_params['params']))
-            raise
-    else:
-        print("Creating new model")
-        dummy_input = jnp.zeros((1, 16), dtype=jnp.int32)
-        dummy_state = RWKV.get_init_state(config, 1)
-        init_rngs = {'params': jax.random.PRNGKey(0), 'dropout': jax.random.PRNGKey(1)}
-        _, params = model.init_with_output(init_rngs, dummy_input, dummy_state, deterministic=False)
-        params = params['params']  
-        
-    return model, params
-
-model, params = init_or_load_model(config, MODEL_PATH)
-
-def load_checkpoint(checkpoint_path):
-    print(f"Loading checkpoint from {checkpoint_path}")
-    with open(checkpoint_path, 'rb') as f:
-        checkpoint = pickle.load(f)
-    print(f"Checkpoint loaded, step: {checkpoint['step']}, epoch: {checkpoint['epoch']}")
-    return checkpoint
-
-def save_checkpoint(train_state, step, epoch, save_dir):
-    os.makedirs(save_dir, exist_ok=True)
-    checkpoint_file = os.path.join(save_dir, f"checkpoint_{step}.rwkv")
-    raw_params = jax.device_get(train_state.params)
-    checkpoint = {
-        'params': raw_params,
-        'step': step,
-        'epoch': epoch
-    }
-    with open(checkpoint_file, 'wb') as f:
-        pickle.dump(checkpoint, f)
-    print(f"Checkpoint saved at step {step}, epoch {epoch}")
+def create_checkpoint_manager(directory, max_to_keep=3):
+    options = orbax.checkpoint.CheckpointManagerOptions(
+        max_to_keep=max_to_keep, create=True)
+    return orbax.checkpoint.CheckpointManager(
+        directory, orbax.checkpoint.PyTreeCheckpointer(), options)
 
 def create_learning_rate_schedule():
     def schedule(step):
@@ -125,21 +60,35 @@ def create_train_state(params, learning_rate_schedule):
         optax.clip(GRAD_CLIP_VALUE),
         optax.adamw(learning_rate_schedule, b1=0.9, b2=0.999, eps=1e-8, weight_decay=0.01)
     )
-    return train_state.TrainState.create(apply_fn=model.apply, params=params, tx=tx)
+    state = train_state.TrainState.create(apply_fn=model.apply, params=params, tx=tx)
+    checkpoint_manager = create_checkpoint_manager(SAVE_PATH)
+    return state, checkpoint_manager
 
-def find_latest_checkpoint(checkpoint_dir):
-    if not os.path.exists(checkpoint_dir):
-        return None
-    checkpoints = [f for f in os.listdir(checkpoint_dir) if f.startswith('checkpoint_') and f.endswith('.rwkv')]
-    if not checkpoints:
-        return None
+def save_checkpoint(checkpoint_manager, train_state, step):
+    save_args = orbax_utils.save_args_from_target(train_state)
+    checkpoint_manager.save(step, train_state, save_kwargs={'save_args': save_args})
+    print(f"Checkpoint saved at step {step}")
+
+def load_checkpoint(checkpoint_manager, train_state):
+    step = checkpoint_manager.latest_step()
+    if step is not None:
+        return checkpoint_manager.restore(step, items=train_state), step
+    return None, 0
+
+def init_or_load_model(config, model_path):
+    model = RWKV(config)
+    checkpoint_manager = create_checkpoint_manager(model_path)
     
-    def extract_step(checkpoint_name):
-        match = re.search(r'checkpoint_(\d+)\.rwkv', checkpoint_name)
-        return int(match.group(1)) if match else -1
-    
-    latest_checkpoint = max(checkpoints, key=extract_step)
-    return os.path.join(checkpoint_dir, latest_checkpoint)
+    if checkpoint_manager.latest_step() is not None:
+        print(f"Loading model from {model_path}")
+        dummy_state = create_train_state(model.init(jax.random.PRNGKey(0), jnp.ones((1, 1), dtype=jnp.int32), RWKV.get_init_state(config, 1))['params'], create_learning_rate_schedule())[0]
+        loaded_state = checkpoint_manager.restore(checkpoint_manager.latest_step(), items=dummy_state)
+        return model, loaded_state.params
+    else:
+        print("Creating new model")
+        return model, model.init(jax.random.PRNGKey(0), jnp.ones((1, 1), dtype=jnp.int32), RWKV.get_init_state(config, 1))['params']
+
+model, params = init_or_load_model(config, MODEL_PATH)
 
 dataset = MMapIndexedDataset(DATA_PATH)
 
@@ -188,7 +137,6 @@ def train_step(state, batch, mask, init_state, dropout_rng):
     max_grad = jax.lax.pmean(jnp.max(jnp.abs(jax.tree_util.tree_leaves(grads)[0])), axis_name='batch')
     return new_state, loss, new_state, max_grad, jnp.isnan(loss).any(), new_dropout_rng
 
-
 def train():
     global global_step
     total_tokens = len(dataset)
@@ -196,25 +144,14 @@ def train():
     steps_per_epoch = total_tokens // tokens_per_step
     total_steps = steps_per_epoch * EPOCHS
     
-    latest_checkpoint = find_latest_checkpoint(SAVE_PATH)
-    if latest_checkpoint:
-        checkpoint_file = os.path.join(latest_checkpoint, "checkpoint")
-        if os.path.exists(checkpoint_file):
-            loaded_state = load_checkpoint(checkpoint_file)
-            learning_rate_schedule = create_learning_rate_schedule()
-            train_state = create_train_state(loaded_state['params'], learning_rate_schedule)
-            global_step = loaded_state['step']
-            current_epoch = global_step // steps_per_epoch
-        else:
-            learning_rate_schedule = create_learning_rate_schedule()
-            train_state = create_train_state(params, learning_rate_schedule)
-            global_step = 0
-            current_epoch = 0
-    else:
-        learning_rate_schedule = create_learning_rate_schedule()
-        train_state = create_train_state(params, learning_rate_schedule)
-        global_step = 0
-        current_epoch = 0
+    learning_rate_schedule = create_learning_rate_schedule()
+    train_state, checkpoint_manager = create_train_state(params, learning_rate_schedule)
+    
+    # Load the latest checkpoint if available
+    loaded_state, start_step = load_checkpoint(checkpoint_manager, train_state)
+    if loaded_state is not None:
+        train_state = loaded_state
+        global_step = start_step
     
     train_state = jax.device_put_replicated(train_state, devices)
 
@@ -228,7 +165,7 @@ def train():
     train_state, _, _, _, _, dropout_rng = train_step(train_state, dummy_batch, dummy_mask, dummy_init_state, dropout_rng)
 
     with tqdm(total=total_steps, desc="Training") as pbar:
-        while current_epoch < EPOCHS:
+        while global_step < total_steps:
             rng = jax.random.PRNGKey(global_step)
             
             max_start_idx = total_tokens - SEQ_LEN * BATCH_SIZE
@@ -262,23 +199,15 @@ def train():
                 elif np.isinf(mean_loss):
                     print(f"\nWarning: Inf loss detected at step {global_step}")
                 else:
-                    print(f"\nEpoch {current_epoch+1}/{EPOCHS}, Step {global_step}/{total_steps}, Loss: {mean_loss:.4f}, Max gradient: {max_grad:.4f}")
+                    print(f"\nStep {global_step}/{total_steps}, Loss: {mean_loss:.4f}, Max gradient: {max_grad:.4f}")
 
             if global_step % SAVE_EVERY == 0:
-                save_checkpoint(train_state, global_step, current_epoch, SAVE_PATH)
+                save_checkpoint(checkpoint_manager, jax.device_get(train_state), global_step)
 
-            if global_step % steps_per_epoch == 0:
-                current_epoch += 1
-                print(f"\nCompleted epoch {current_epoch}")
-
+            current_epoch = global_step // steps_per_epoch
             pbar.set_description(f"Training (Epoch {current_epoch+1}/{EPOCHS})")
 
-            if global_step == total_steps:
-                current_epoch += 1
-            if not current_epoch == EPOCHS:
-                continue
-
-    save_checkpoint(train_state, global_step, current_epoch, SAVE_PATH)
+    save_checkpoint(checkpoint_manager, jax.device_get(train_state), global_step)
 
 if __name__ == "__main__":
     train()
