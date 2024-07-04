@@ -184,13 +184,9 @@ class RWKVBlock(nn.Module):
         xg = x + sx * (self.time_maa_g + mg)
 
         r = self.receptance(xr).reshape(B, T, H, S)
-        check_nan(r, 'time_mixing r')
         k = self.key(xk).reshape(B, T, H, S)
-        check_nan(k, 'time_mixing k')
         v = self.value(xv).reshape(B, T, H, S)
-        check_nan(v, 'time_mixing v')
         g = jnn.silu(self.gate(xg))
-        check_nan(v, 'time_mixing g')
 
         time_decay = self.time_decay.reshape(1, 1, H, S)
         time_decay_offset = jnn.tanh(xw @ self.time_decay_w1) @ self.time_decay_w2
@@ -226,9 +222,7 @@ class RWKVBlock(nn.Module):
         xr = x + sx * self.time_maa_r_channel
 
         k = jax.nn.relu(self.key_channel(xk)) ** 2
-        check_nan(k, 'channel_mixing k')
         kv = self.value_channel(k)
-        check_nan(kv, 'channel_mixing kv')
         return jax.nn.sigmoid(self.receptance_channel(xr)) * kv
 
     def __call__(self, x, state, deterministic=False):
