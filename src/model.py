@@ -230,6 +230,7 @@ class RWKVBlock(nn.Module):
         return jax.nn.sigmoid(self.receptance_channel(xr)) * kv
 
     def __call__(self, x, state, deterministic=True):
+        check_nan(x, 'call x')
         x_attn, new_state = self.time_mixing(self.ln1(x), state)
         x = x + x_attn
         x = x + self.channel_mixing(self.ln2(x))
@@ -276,7 +277,7 @@ def create_model(config):
     return model, params
 
 @partial(jax.jit, static_argnums=(0,))
-def model_forward(model, params, idx, state, deterministic=True):
+def model_forward(model, params, idx, state, deterministic=False):
     return model.apply(params, idx, state, deterministic=deterministic, rngs={'dropout': random.PRNGKey(0)})
 
 
