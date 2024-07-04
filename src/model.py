@@ -10,6 +10,8 @@ jax.config.update("jax_log_compiles", True)
 
 DEBUG_EMBED = 0
 DEBUG_BLOCK = 1
+DEBUG_TIME_MIXING = 2
+DEBUG_CHANNEL_MIXING = 3
 
 def check_nan(x, debug_code):
     is_nan = jnp.isnan(x).any()
@@ -230,11 +232,13 @@ class RWKVBlock(nn.Module):
         check_nan(kv, 'channel_mixing kv')
         return jax.nn.sigmoid(self.receptance_channel(xr)) * kv
 
-    def __call__(self, x, state, deterministic=True):
-        check_nan(x, 'call x')
+    def __call__(self, x, state, deterministic=False):
         x_attn, new_state = self.time_mixing(self.ln1(x), state)
         x = x + x_attn
+        x = check_nan(x, DEBUG_TIME_MIXING)
+        
         x = x + self.channel_mixing(self.ln2(x))
+        x = check_nan(x, DEBUG_CHANNEL_MIXING)
 
         if not deterministic:
             x = self.dropout(x, deterministic=deterministic)
