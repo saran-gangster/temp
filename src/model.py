@@ -46,9 +46,7 @@ class GroupNorm(nn.Module):
         x = x.reshape(-1, self.num_groups, x.shape[-1] // self.num_groups)
         mean = jnp.mean(x, axis=(0, 2), keepdims=True)
         var = jnp.var(x, axis=(0, 2), keepdims=True)
-        check_nan(var, 'GroupNorm var')
         x = ((x - mean) / jnp.sqrt(var + self.epsilon)).reshape(orig_shape)
-        check_nan(x, 'GroupNorm x normalized')
         if self.use_scale:
             x *= self.param('scale', nn.initializers.ones, (x.shape[-1],))
         if self.use_bias:
