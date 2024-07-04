@@ -21,7 +21,7 @@ DATA_PATH = 'data/minipile'
 SAVE_PATH = os.path.abspath("rwk34612v")
 
 config = RWKVConfig(
-    vocab_size=50277,
+    vocab_size=65529,
     n_layer=2,
     n_embd=128,
     dim_att=128,
