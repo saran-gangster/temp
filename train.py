@@ -233,7 +233,7 @@ def train():
 
             if global_step % steps_per_epoch == 0:
                 current_epoch += 1
-                print(f"\nCompleted epoch {current_epoch")
+                print(f"\nCompleted epoch {current_epoch}")
 
             pbar.set_description(f"Training (Epoch {current_epoch+1}/{EPOCHS})")
 
