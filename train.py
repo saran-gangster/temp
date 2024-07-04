@@ -39,6 +39,7 @@ assert BATCH_SIZE % num_devices == 0, f"Batch size must be divisible by the numb
 tokenizer = RWKVTokenizer(TOKENIZER_PATH)
 
 def init_or_load_model(config, model_path):
+    model = RWKV(config)
     if os.path.exists(model_path):
         print(f"Loading model from {model_path}")
         with open(model_path, 'rb') as f:
@@ -49,7 +50,12 @@ def init_or_load_model(config, model_path):
         else:
             params = loaded_data
         
-        model, _ = create_model(config)
+        # Create a dummy input to initialize the model
+        dummy_input = jnp.zeros((1, 16), dtype=jnp.int32)
+        dummy_state = RWKV.get_init_state(config, 1)
+        init_rngs = {'params': jax.random.PRNGKey(0), 'dropout': jax.random.PRNGKey(1)}
+        
+        _, initial_params = model.init_with_output(init_rngs, dummy_input, dummy_state, deterministic=False)
         
         def reshape_params(loaded_param, expected_param):
             if loaded_param.shape != expected_param.shape:
@@ -57,10 +63,13 @@ def init_or_load_model(config, model_path):
                     return loaded_param[:config.vocab_size]
             return loaded_param
 
-        params = jax.tree_map(reshape_params, params, model.params)
+        params = jax.tree_util.tree_map(reshape_params, params, initial_params)
     else:
         print("Creating new model")
-        model, params = create_model(config)
+        dummy_input = jnp.zeros((1, 16), dtype=jnp.int32)
+        dummy_state = RWKV.get_init_state(config, 1)
+        init_rngs = {'params': jax.random.PRNGKey(0), 'dropout': jax.random.PRNGKey(1)}
+        _, params = model.init_with_output(init_rngs, dummy_input, dummy_state, deterministic=False)
         with open(model_path, 'wb') as f:
             pickle.dump(params, f)
     return model, params
