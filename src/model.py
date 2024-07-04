@@ -109,6 +109,8 @@ class RWKVBlock(nn.Module):
         self.ln1 = nn.LayerNorm(epsilon=self.config.layer_norm_epsilon)
         self.ln2 = nn.LayerNorm(epsilon=self.config.layer_norm_epsilon)
 
+        self.dropout = nn.Dropout(rate=self.config.dropout)
+
     def time_shift(self, x):
         shifted = jnp.pad(x[:, :-1], ((0, 0), (1, 0), (0, 0)))
         check_nan(shifted, 'time_shift')
@@ -235,7 +237,7 @@ class RWKVBlock(nn.Module):
         x = x + self.channel_mixing(self.ln2(x))
 
         if not deterministic:
-            x = nn.Dropout(rate=self.config.dropout)(x, deterministic=deterministic)
+            x = self.dropout(x, deterministic=deterministic)
 
         return x, new_state
 
