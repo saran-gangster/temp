@@ -253,8 +253,8 @@ class RWKV(nn.Module):
         
         idx = jax.lax.cond(
             jnp.logical_or(jnp.any(idx < 0), jnp.any(idx >= self.config.vocab_size)),
-            error_fn,
-            identity_fn,
+            errorfn,
+            identityfn,
             idx
         )
         x = nn.Embed(num_embeddings=self.config.vocab_size, features=self.config.n_embd,embedding_init=nn.initializers.normal(stddev=0.01))(idx)
