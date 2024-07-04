@@ -242,29 +242,8 @@ class RWKV(nn.Module):
 
     @nn.compact
     def __call__(self, idx, state, deterministic=False, rngs=None):
-        jax.debug.print("Input shape: {}", idx.shape)
-        out_of_range = jnp.logical_or(idx < 0, idx >= self.config.vocab_size)
-        num_out_of_range = jnp.sum(out_of_range)
-        
-        def true_fn(operand):
-            jax.debug.print("Number of out-of-range indices: {}", num_out_of_range)
-            return operand
-    
-        def false_fn(operand):
-            return operand
-    
-        _ = jax.lax.cond(
-            num_out_of_range > 0,
-            true_fn,
-            false_fn,
-            operand=num_out_of_range
-        )
-    
         idx = jnp.clip(idx, 0, self.config.vocab_size - 1)
         
-        jax.debug.print("WARNING: Input indices out of range: {}", 
-                        jnp.logical_or(idx < 0, idx >= self.config.vocab_size).any())
-
         x = nn.Embed(num_embeddings=self.config.vocab_size, 
                      features=self.config.n_embd,
                      embedding_init=nn.initializers.normal(stddev=0.01))(idx)
