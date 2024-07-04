@@ -141,7 +141,7 @@ def preprocess_data(text, tokenizer, max_length):
         encoded_data = encoded_data + [0] * (max_length - len(encoded_data))
     return jnp.array(encoded_data)
 
-preprocessed_data = preprocess_data(dataset, tokenizer, SEQ_LEN)
+dataset = preprocess_data(dataset, tokenizer, SEQ_LEN)
 
 def pad_sequences(sequences, max_len, pad_value=0):
     padded = []
