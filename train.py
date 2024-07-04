@@ -255,14 +255,14 @@ def train():
                 init_state = jnp.repeat(init_state[jnp.newaxis, ...], num_devices, axis=0)
 
                 train_state, loss, _, max_grad, is_nan, dropout_rng = train_step(train_state, padded_sequences, mask, init_state, dropout_rng)
-                
+
                 global_step += 1
                 pbar.update(1)
-                
+
                 if global_step % 2 == 0:
                     loss = jax.device_get(loss)
-                    mean_loss = jnp.mean(loss)
-                    max_grad = jax.device_get(max_grad)
+                    mean_loss = jnp.mean(loss).item()  # Extract scalar value
+                    max_grad = jax.device_get(max_grad).item()  # Extract scalar value
                     is_nan = jax.device_get(is_nan)
                     
                     if is_nan.any():
@@ -271,6 +271,7 @@ def train():
                         print(f"Warning: Inf loss detected at step {global_step}")
                     else:
                         print(f"Step {global_step}, Loss: {mean_loss:.4f}, Max gradient: {max_grad:.4f}")
+
 
                 if global_step % SAVE_EVERY == 0:
                     save_dir = os.path.join(SAVE_PATH, f"checkpoint_{global_step}")
