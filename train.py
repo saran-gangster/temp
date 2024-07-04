@@ -220,6 +220,7 @@ def train():
     
     print("Training state initialized.")
 
+    # Compilation step
     dummy_batch = jnp.ones((num_devices, BATCH_SIZE_PER_DEVICE, SEQ_LEN), dtype=jnp.int32)
     dummy_mask = jnp.ones((num_devices, BATCH_SIZE_PER_DEVICE, SEQ_LEN), dtype=jnp.int32)
     dummy_init_state = RWKV.get_init_state(config, BATCH_SIZE_PER_DEVICE)
@@ -232,55 +233,55 @@ def train():
     print("Compilation done.")
 
     total_steps = (len(dataset) // (BATCH_SIZE * SEQ_LEN)) * EPOCHS
+    steps_per_epoch = len(dataset) // (BATCH_SIZE * SEQ_LEN)
 
     with tqdm(total=total_steps, desc="Training") as pbar:
-        for epoch in range(EPOCHS):
-            steps_per_epoch = len(dataset) // (BATCH_SIZE * SEQ_LEN)
-            for step in range(steps_per_epoch):
-                rng = jax.random.PRNGKey(epoch * steps_per_epoch + step)
+        for step in range(total_steps):
+            epoch = step // steps_per_epoch
+            rng = jax.random.PRNGKey(step)
 
-                idxs = jax.random.randint(rng, (BATCH_SIZE,), 0, len(dataset) - SEQ_LEN)
-                sequences = [dataset[idx:idx+SEQ_LEN] for idx in idxs]
+            idxs = jax.random.randint(rng, (BATCH_SIZE,), 0, len(dataset) - SEQ_LEN)
+            sequences = [dataset[idx:idx+SEQ_LEN] for idx in idxs]
 
-                padded_sequences = pad_sequences(sequences, SEQ_LEN)
-                mask = create_mask(padded_sequences, SEQ_LEN)
+            padded_sequences = pad_sequences(sequences, SEQ_LEN)
+            mask = create_mask(padded_sequences, SEQ_LEN)
 
-                padded_sequences = padded_sequences.reshape(num_devices, BATCH_SIZE_PER_DEVICE, SEQ_LEN)
-                mask = mask.reshape(num_devices, BATCH_SIZE_PER_DEVICE, SEQ_LEN)
+            padded_sequences = padded_sequences.reshape(num_devices, BATCH_SIZE_PER_DEVICE, SEQ_LEN)
+            mask = mask.reshape(num_devices, BATCH_SIZE_PER_DEVICE, SEQ_LEN)
 
-                padded_sequences = jnp.array(padded_sequences)
-                mask = jnp.array(mask)
+            padded_sequences = jnp.array(padded_sequences)
+            mask = jnp.array(mask)
 
-                init_state = RWKV.get_init_state(config, BATCH_SIZE_PER_DEVICE)
-                init_state = jnp.repeat(init_state[jnp.newaxis, ...], num_devices, axis=0)
+            init_state = RWKV.get_init_state(config, BATCH_SIZE_PER_DEVICE)
+            init_state = jnp.repeat(init_state[jnp.newaxis, ...], num_devices, axis=0)
 
-                train_state, loss, _, max_grad, is_nan, dropout_rng = train_step(
-                    train_state, padded_sequences, mask, init_state, dropout_rng
-                )
+            train_state, loss, _, max_grad, is_nan, dropout_rng = train_step(
+                train_state, padded_sequences, mask, init_state, dropout_rng
+            )
 
-                global_step += 1
-                pbar.update(1)
+            global_step += 1
+            pbar.update(1)
 
-                if global_step % 2 == 0:
-                    loss = jax.device_get(loss)
-                    mean_loss = np.mean(loss)
-                    max_grad = np.max(jax.device_get(max_grad))  # Get max across all devices
-                    is_nan = jax.device_get(is_nan)
-                    
-                    if np.any(is_nan):
-                        print(f"Warning: NaN detected at step {global_step}")
-                    elif np.isinf(mean_loss):
-                        print(f"Warning: Inf loss detected at step {global_step}")
-                    else:
-                        print(f"Step {global_step}, Loss: {mean_loss:.4f}, Max gradient: {max_grad:.4f}")
+            if global_step % 2 == 0:
+                loss = jax.device_get(loss)
+                mean_loss = np.mean(loss)
+                max_grad = np.max(jax.device_get(max_grad))  # Get max across all devices
+                is_nan = jax.device_get(is_nan)
+                
+                if np.any(is_nan):
+                    print(f"Warning: NaN detected at step {global_step}")
+                elif np.isinf(mean_loss):
+                    print(f"Warning: Inf loss detected at step {global_step}")
+                else:
+                    print(f"Step {global_step}, Loss: {mean_loss:.4f}, Max gradient: {max_grad:.4f}")
 
-                if global_step % SAVE_EVERY == 0:
-                    save_dir = os.path.join(SAVE_PATH, f"checkpoint_{global_step}")
-                    os.makedirs(save_dir, exist_ok=True)
-                    flat_params = jax.tree_util.tree_map(lambda x: x[0], jax.device_get(train_state.params))
-                    checkpoint_file = os.path.join(save_dir, "checkpoint")
-                    with open(checkpoint_file, 'wb') as f:
-                        pickle.dump({'params': flat_params, 'step': global_step}, f)
+            if global_step % SAVE_EVERY == 0:
+                save_dir = os.path.join(SAVE_PATH, f"checkpoint_{global_step}")
+                os.makedirs(save_dir, exist_ok=True)
+                flat_params = jax.tree_util.tree_map(lambda x: x[0], jax.device_get(train_state.params))
+                checkpoint_file = os.path.join(save_dir, "checkpoint")
+                with open(checkpoint_file, 'wb') as f:
+                    pickle.dump({'params': flat_params, 'step': global_step}, f)
 
     final_save_dir = os.path.join(SAVE_PATH, "checkpoint_final")
     os.makedirs(final_save_dir, exist_ok=True)
