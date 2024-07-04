@@ -1,23 +1,11 @@
 import jax
 import jax.numpy as jnp
-from jax import random
-from jax import nn as jnn
+from jax import random, nn as jnn
 import flax.linen as nn
 from typing import Any
 from functools import partial
 from dataclasses import dataclass
-jax.config.update("jax_log_compiles", True)
 
-DEBUG_EMBED = 0
-DEBUG_BLOCK = 1
-DEBUG_TIME_MIXING = 2
-DEBUG_CHANNEL_MIXING = 3
-
-def check_nan(x, debug_code):
-    is_nan = jnp.isnan(x).any()
-    jax.debug.print("WARNING: NaNs found in {}: {}", debug_code, is_nan)
-    return jnp.where(is_nan, jnp.zeros_like(x), x)
-    
 @dataclass(frozen=True)
 class RWKVConfig:
     vocab_size: int
@@ -78,6 +66,7 @@ class RWKVBlock(nn.Module):
         self.time_maa_v = init_time_maa('time_maa_v', ratio_1_to_almost0 + 0.3 * ratio_0_to_1)
         self.time_maa_r = init_time_maa('time_maa_r', 0.5 * ratio_1_to_almost0)
         self.time_maa_g = init_time_maa('time_maa_g', 0.5 * ratio_1_to_almost0)
+
         def init_time_decay(key, shape):
             return (-6 + 5 * (jnp.arange(args.dim_att) / (args.dim_att - 1)) ** (0.7 + 1.3 * ratio_0_to_1))
         self.time_decay = self.param('time_decay', init_time_decay, (1, args.dim_att))
@@ -112,8 +101,7 @@ class RWKVBlock(nn.Module):
         self.dropout = nn.Dropout(rate=self.config.dropout)
 
     def time_shift(self, x):
-        shifted = jnp.pad(x[:, :-1], ((0, 0), (1, 0), (0, 0)))
-        return shifted
+        return jnp.pad(x[:, :-1], ((0, 0), (1, 0), (0, 0)))
 
     @partial(jax.vmap, in_axes=(None, 0, 0, 0, 0, 0, 0))
     def chunkwise(self, k, v, r, w, u, state):
@@ -127,13 +115,10 @@ class RWKVBlock(nn.Module):
         L_padded = L + pad_size
         r, k, v, w, u = map(lambda x: x.reshape((L_padded // C, C, -1)), [r, k, v, w, u])
         
-        w_min = jnp.float32(10**(-70 / C))  
         w = jax.lax.clamp(self.min_clamp, w, 1.0)
         w = jnp.log(w)
         
-        
         A = jnp.exp(jnp.cumsum(w, axis=1))
-        
         A_inter = jnp.exp(jax.lax.cumsum(w, axis=1, reverse=True) - w)
         A_intra = jnp.cumsum(w, axis=1)
         kv = jnp.einsum('nij,nik->nijk', A_inter * k, v)
@@ -144,9 +129,7 @@ class RWKVBlock(nn.Module):
             new_s = A_t * s + kv_t
             return new_s, s
 
-        init_carry = state
-        new_state, S = jax.lax.scan(scan_fn, init_carry, (A.reshape(L_padded, D), kv.reshape(L_padded, D, D)))
-
+        new_state, S = jax.lax.scan(scan_fn, state, (A.reshape(L_padded, D), kv.reshape(L_padded, D, D)))
         S = S.reshape(L_padded // C, C, D, D)
         
         inter_chunk = jnp.einsum('nij,nijk->nik', r * jnp.exp(A_intra - w), S)
@@ -162,7 +145,6 @@ class RWKVBlock(nn.Module):
         
         result = (inter_chunk + intra_chunk).reshape((L_padded, -1))
         return result[:L], new_state
-
 
     def time_mixing(self, x, state):
         B, T, C = x.shape
@@ -190,8 +172,7 @@ class RWKVBlock(nn.Module):
         time_decay_offset = jnn.tanh(xw @ self.time_decay_w1) @ self.time_decay_w2
         time_decay_offset = time_decay_offset.reshape(B, T, H, S)
 
-        w = jnp.exp(-jnp.exp(time_decay + time_decay_offset)+ 1e-8)
-        # w = jax.nn.softplus(-(time_decay + time_decay_offset))
+        w = jnp.exp(-jnp.exp(time_decay + time_decay_offset) + 1e-8)
 
         u = jnp.broadcast_to(self.time_faaaa, (B, T, H, S))
 
@@ -226,16 +207,12 @@ class RWKVBlock(nn.Module):
     def __call__(self, x, state, deterministic=False, rngs=None):
         x_attn, new_state = self.time_mixing(self.ln1(x), state)
         x = x + x_attn
-        # x = check_nan(x, DEBUG_TIME_MIXING)
-        
         x = x + self.channel_mixing(self.ln2(x))
-        # x = check_nan(x, DEBUG_CHANNEL_MIXING)
 
         if not deterministic:
             x = self.dropout(x, deterministic=deterministic, rng=rngs['dropout'] if rngs is not None else None)
 
         return x, new_state
-
 
 class RWKV(nn.Module):
     config: RWKVConfig
@@ -247,12 +224,10 @@ class RWKV(nn.Module):
         x = nn.Embed(num_embeddings=self.config.vocab_size, 
                      features=self.config.n_embd,
                      embedding_init=nn.initializers.normal(stddev=0.01))(idx)
-        x = check_nan(x, DEBUG_EMBED)
 
         new_states = []
         for i in range(self.config.n_layer):
             block = RWKVBlock(self.config, i)
-            # x = check_nan(x, DEBUG_BLOCK)
             x, new_state = block(x, state[:, i], deterministic=deterministic, rngs=rngs)
             new_states.append(new_state)
 
@@ -265,7 +240,7 @@ class RWKV(nn.Module):
     @classmethod
     def get_init_state(cls, config, batch_size):
         return jnp.zeros((batch_size, config.n_layer, config.n_head, config.head_size_a, config.head_size_a))
-        
+
 def create_model(config):
     model = RWKV(config)
     key = jax.random.PRNGKey(0)
@@ -286,7 +261,6 @@ def create_model(config):
 def model_forward(model, params, idx, state, deterministic=False):
     return model.apply(params, idx, state, deterministic=deterministic, rngs={'dropout': random.PRNGKey(0)})
 
-
 if __name__ == "__main__":
     config = RWKVConfig(
         vocab_size=10000,
@@ -301,7 +275,7 @@ if __name__ == "__main__":
         layer_norm_epsilon=1e-5,
         chunk_size=64, 
         subchunk_size=32,
-        min_clamp = 0.01
+        min_clamp=0.01
     )
 
     model, params = create_model(config)
