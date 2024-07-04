@@ -133,6 +133,9 @@ def find_latest_checkpoint(checkpoint_dir):
     return os.path.join(checkpoint_dir, latest_checkpoint)
 
 dataset = MMapIndexedDataset(DATA_PATH)
+print(f"Dataset length: {len(dataset)}")
+print(f"First 10 tokens: {dataset[:10]}")
+print(f"Last 10 tokens: {dataset[-10:]}")
 
 def pad_sequences(sequences, max_len, pad_value=0):
     padded = []
@@ -185,6 +188,15 @@ def train_step(state, batch, mask, init_state, dropout_rng):
     new_state = state.apply_gradients(grads=grads)
     max_grad = jax.lax.pmean(jnp.max(jnp.abs(jax.tree_util.tree_leaves(grads)[0])), axis_name='batch')
     return new_state, loss, new_state, max_grad, jnp.isnan(loss).any(), new_dropout_rng
+
+def check_tokenized_data(sequences):
+    flat_sequences = sequences.reshape(-1)
+    min_token = np.min(flat_sequences)
+    max_token = np.max(flat_sequences)
+    unique_tokens = np.unique(flat_sequences)
+    print(f"Token range: {min_token} to {max_token}")
+    print(f"Number of unique tokens: {len(unique_tokens)}")
+    print(f"Sample of unique tokens: {unique_tokens[:10]}")  
 
 def train():
     global global_step
@@ -240,6 +252,7 @@ def train():
             sequences = [dataset[idx:idx+SEQ_LEN] for idx in idxs]
 
             padded_sequences = pad_sequences(sequences, SEQ_LEN)
+            check_tokenized_data(padded_sequences)
             mask = create_mask(padded_sequences, SEQ_LEN)
 
             padded_sequences = padded_sequences.reshape(num_devices, BATCH_SIZE_PER_DEVICE, SEQ_LEN)
