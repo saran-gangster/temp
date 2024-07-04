@@ -197,8 +197,10 @@ def check_tokenized_data(sequences):
     print(f"Token range: {min_token} to {max_token}")
     print(f"Number of unique tokens: {len(unique_tokens)}")
     print(f"Sample of unique tokens: {unique_tokens[:10]}")  
-    
+
+print(config.vocab_size)
 assert config.vocab_size == 65529, "Mismatch between config vocab_size and tokenizer vocab size"
+
 
 def train():
     global global_step
