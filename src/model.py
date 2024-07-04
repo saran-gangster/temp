@@ -244,12 +244,14 @@ class RWKV(nn.Module):
     config: RWKVConfig
 
     @nn.compact
-    def __call__(self, idx, state, deterministic=True):
+    def __call__(self, idx, state, deterministic=False):
         x = nn.Embed(num_embeddings=self.config.vocab_size, features=self.config.n_embd)(idx)
+        check_nan(x, 'Embed x')
 
         new_states = []
         for i in range(self.config.n_layer):
             block = RWKVBlock(self.config, i)
+            check_nan(x, 'in loop x')
             x, new_state = block(x, state[:, i], deterministic=deterministic)
             new_states.append(new_state)
 
