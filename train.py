@@ -203,11 +203,11 @@ def train():
                 mean_loss, max_grad = np.mean(loss), np.max(jax.device_get(max_grad))
                 is_nan = jax.device_get(is_nan)
                 if np.any(is_nan):
-                    print(f"Warning: NaN detected at step {global_step}")
+                    print(f"\nWarning: NaN detected at step {global_step}")
                 elif np.isinf(mean_loss):
-                    print(f"Warning: Inf loss detected at step {global_step}")
+                    print(f"\nWarning: Inf loss detected at step {global_step}")
                 else:
-                    print(f"Step {global_step}, Loss: {mean_loss:.4f}, Max gradient: {max_grad:.4f}")
+                    print(f"\nStep {global_step}, Loss: {mean_loss:.4f}, Max gradient: {max_grad:.4f}")
             if global_step % SAVE_EVERY == 0:
                 save_dir = os.path.join(SAVE_PATH, f"checkpoint_{global_step}")
                 os.makedirs(save_dir, exist_ok=True)
