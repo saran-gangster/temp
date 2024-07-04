@@ -241,7 +241,7 @@ class RWKV(nn.Module):
     config: RWKVConfig
 
     @nn.compact
-    def __call__(self, idx, state, deterministic=False):
+    def __call__(self, idx, state, deterministic=False, rngs=None):
         idx = jnp.clip(idx, 0, self.config.vocab_size - 1)
         
         jax.debug.print("WARNING: Input indices out of range: {}", 
