@@ -226,10 +226,10 @@ class RWKVBlock(nn.Module):
     def __call__(self, x, state, deterministic=False, rngs=None):
         x_attn, new_state = self.time_mixing(self.ln1(x), state)
         x = x + x_attn
-        x = check_nan(x, DEBUG_TIME_MIXING)
+        # x = check_nan(x, DEBUG_TIME_MIXING)
         
         x = x + self.channel_mixing(self.ln2(x))
-        x = check_nan(x, DEBUG_CHANNEL_MIXING)
+        # x = check_nan(x, DEBUG_CHANNEL_MIXING)
 
         if not deterministic:
             x = self.dropout(x, deterministic=deterministic, rng=rngs['dropout'] if rngs is not None else None)
@@ -252,7 +252,7 @@ class RWKV(nn.Module):
         new_states = []
         for i in range(self.config.n_layer):
             block = RWKVBlock(self.config, i)
-            x = check_nan(x, DEBUG_BLOCK)
+            # x = check_nan(x, DEBUG_BLOCK)
             x, new_state = block(x, state[:, i], deterministic=deterministic, rngs=rngs)
             new_states.append(new_state)
 
