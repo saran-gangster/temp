@@ -193,8 +193,8 @@ class RWKVBlock(nn.Module):
         time_decay_offset = jnn.tanh(xw @ self.time_decay_w1) @ self.time_decay_w2
         time_decay_offset = time_decay_offset.reshape(B, T, H, S)
 
-        # w = jnp.exp(-jnp.exp(time_decay + time_decay_offset)+ 1e-6)
-        w = jax.nn.softplus(-(time_decay + time_decay_offset))
+        w = jnp.exp(-jnp.exp(time_decay + time_decay_offset)+ 1e-8)
+        # w = jax.nn.softplus(-(time_decay + time_decay_offset))
 
         u = jnp.broadcast_to(self.time_faaaa, (B, T, H, S))
 
