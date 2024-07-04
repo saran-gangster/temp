@@ -115,7 +115,6 @@ class RWKVBlock(nn.Module):
 
     def time_shift(self, x):
         shifted = jnp.pad(x[:, :-1], ((0, 0), (1, 0), (0, 0)))
-        check_nan(shifted, 'time_shift')
         return shifted
 
     @partial(jax.vmap, in_axes=(None, 0, 0, 0, 0, 0, 0))
