@@ -35,7 +35,7 @@ checkpoint:
 
 # Configure Paths
 paths:
-  model_path: './weight/samplev6.rwkv'       
+  model_path: './weight/samplev6.rwkv'        # Make sure this dir exists, otherwise your model won't save
   tokenizer_path: 'rwkv_vocab_v20230424.txt'  
   data_path: 'data/minipile'               
   save_path: 'rwkv_checkpoints'        
