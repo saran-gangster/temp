@@ -4,8 +4,7 @@ from jax import random, nn as jnn
 import flax.linen as nn
 from typing import Any
 from functools import partial
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class RWKVConfig:
@@ -21,11 +20,7 @@ class RWKVConfig:
     layer_norm_epsilon: float
     chunk_size: int
     subchunk_size: int
-    min_clamp: Optional[int] = field(default=None)
-
-    def __post_init__(self):
-        if self.min_clamp is None:
-            object.__setattr__(self, 'min_clamp', 10 ** (-74 / self.chunk_size))
+    min_clamp: int
 
 class GroupNorm(nn.Module):
     num_groups: int
