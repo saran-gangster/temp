@@ -50,7 +50,7 @@ class RWKVBlock(nn.Module):
         args = self.config
         self.head_size = args.head_size_a
         self.n_head = args.dim_att // self.head_size
-        self.min_clamp = args.min_clamp
+        self.min_clamp = args.min_clamp if arg.min_clamp is not None else 10**(-74 / self.config.chunk_size)
         assert args.dim_att % self.n_head == 0
 
         ratio_0_to_1 = self.layer_id / (args.n_layer - 1)
