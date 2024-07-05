@@ -21,7 +21,11 @@ class RWKVConfig:
     layer_norm_epsilon: float
     chunk_size: int
     subchunk_size: int
-    min_clamp: Optional[int] = field(default=10**(-74 / chunk_size))
+    min_clamp: Optional[int] = field(default=None)
+
+    def __post_init__(self):
+        if self.min_clamp is None:
+            object.__setattr__(self, 'min_clamp', 10 ** (-74 / self.chunk_size))
 
 class GroupNorm(nn.Module):
     num_groups: int
