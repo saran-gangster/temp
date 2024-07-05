@@ -21,7 +21,7 @@ class RWKVConfig:
     layer_norm_epsilon: float
     chunk_size: int
     subchunk_size: int
-    min_clamp: Optional[int] = field(default=None)
+    min_clamp: Optional[int] = field(default=10**(-74 / self.chunk_size))
 
 class GroupNorm(nn.Module):
     num_groups: int
@@ -50,7 +50,7 @@ class RWKVBlock(nn.Module):
         args = self.config
         self.head_size = args.head_size_a
         self.n_head = args.dim_att // self.head_size
-        self.min_clamp = 10**(-74 / self.config.chunk_size) if args.min_clamp == None else args.min_clamp
+        self.min_clamp = args.min_clamp
         assert args.dim_att % self.n_head == 0
 
         ratio_0_to_1 = self.layer_id / (args.n_layer - 1)
