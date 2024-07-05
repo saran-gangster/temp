@@ -5,6 +5,7 @@ import flax.linen as nn
 from typing import Any
 from functools import partial
 from dataclasses import dataclass
+from typing import Optional
 
 @dataclass(frozen=True)
 class RWKVConfig:
@@ -20,7 +21,7 @@ class RWKVConfig:
     layer_norm_epsilon: float
     chunk_size: int
     subchunk_size: int
-    min_clamp: int
+    min_clamp: Optional[int] = field(default=None)
 
 class GroupNorm(nn.Module):
     num_groups: int
