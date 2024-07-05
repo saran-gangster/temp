@@ -4,7 +4,7 @@ from jax import random, nn as jnn
 import flax.linen as nn
 from typing import Any
 from functools import partial
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 @dataclass(frozen=True)
