@@ -1,5 +1,6 @@
 import os
-import re
+import pickle
+import yaml
 import jax
 import jax.numpy as jnp
 import optax
@@ -7,39 +8,43 @@ from flax.training import train_state
 import numpy as np
 from tqdm import tqdm
 from functools import partial
-from src.model import RWKV, RWKVConfig, create_model
+from src.model import RWKV, RWKVConfig
 from src.tokenizer import RWKVTokenizer
 from src.binidx import MMapIndexedDataset
 import orbax.checkpoint
 from flax.training import orbax_utils
 
-MODEL_PATH = './weight/RWKV-x060.rwkv'
-TOKENIZER_PATH = "rwkv_vocab_v20230424.txt"
-DATA_PATH = 'data/minipile'
-SAVE_PATH = os.path.abspath("rwkv_checkpoints")
+class DotDict(dict):
+    __getattr__ = dict.get
+    __setattr__ = dict.__setitem__
+    __delattr__ = dict.__delitem__
 
-config = RWKVConfig(
-    vocab_size=65529, n_layer=2, n_embd=128, dim_att=128, dim_ffn=512,
-    head_size_a=32, n_head=4, head_size_divisor=8, dropout=0.1,
-    layer_norm_epsilon=1e-5, chunk_size=32, subchunk_size=64, min_clamp=0.05
-)
+    def __init__(self, dct):
+        for key, value in dct.items():
+            if isinstance(value, dict):
+                self[key] = DotDict(value)
+            else:
+                self[key] = value
 
-INITIAL_LEARNING_RATE, MAX_LEARNING_RATE = 1e-5, 1e-3
-WARMUP_STEPS, DECAY_STEPS = 1000, 10000
-BATCH_SIZE, SEQ_LEN, EPOCHS = 32, 512, 6
-SAVE_EVERY = 1000
-GRAD_CLIP_NORM, GRAD_CLIP_VALUE = 0.5, 0.5
-EPSILON, LABEL_SMOOTHING = 1e-8, 0.1
-global_step = 0
+with open('config.yaml', 'r') as f:
+    config_dict = yaml.safe_load(f)
+
+config = DotDict(config_dict)
 
 devices = jax.local_devices()
 num_devices = len(devices)
-BATCH_SIZE_PER_DEVICE = BATCH_SIZE // num_devices
-assert BATCH_SIZE % num_devices == 0, f"Batch size must be divisible by the number of devices. Got {BATCH_SIZE} and {num_devices} devices."
+batch_size_per_device = config.training.batch_size // num_devices
+assert config.training.batch_size % num_devices == 0, f"Batch size must be divisible by the number of devices. Got {config.training.batch_size} and {num_devices} devices."
 
-tokenizer = RWKVTokenizer(TOKENIZER_PATH)
+config.model.min_clamp = config.model.min_clamp if config.model.min_clamp==str(None) else 10 ** (-74 / config.model.chunk_size)
+rwkv_config = RWKVConfig(**config.model)
 
-def create_checkpoint_manager(directory, max_to_keep=3):
+global_step = 0
+
+tokenizer = RWKVTokenizer(config.paths.tokenizer_path)
+
+def create_checkpoint_manager(directory, max_to_keep=config.checkpoint.max_checkpoints_to_keep):
+    directory = os.path.abspath(directory)
     options = orbax.checkpoint.CheckpointManagerOptions(
         max_to_keep=max_to_keep, create=True)
     return orbax.checkpoint.CheckpointManager(
@@ -47,50 +52,75 @@ def create_checkpoint_manager(directory, max_to_keep=3):
 
 def create_learning_rate_schedule():
     def schedule(step):
-        warmup_factor = jnp.minimum(step / WARMUP_STEPS, 1.0)
-        warmup_lr = INITIAL_LEARNING_RATE + (MAX_LEARNING_RATE - INITIAL_LEARNING_RATE) * warmup_factor
-        decay_factor = jnp.maximum(0.0, 1.0 - (step - WARMUP_STEPS) / DECAY_STEPS)
-        decay_lr = MAX_LEARNING_RATE * decay_factor
-        return jnp.where(step < WARMUP_STEPS, warmup_lr, decay_lr)
+        warmup_factor = jnp.minimum(step / config.training.warmup_steps, 1.0)
+        warmup_lr = config.training.initial_learning_rate + (config.training.max_learning_rate - config.training.initial_learning_rate) * warmup_factor
+        decay_factor = jnp.maximum(0.0, 1.0 - (step - config.training.warmup_steps) / config.training.decay_steps)
+        decay_lr = config.training.max_learning_rate * decay_factor
+        return jnp.where(step < config.training.warmup_steps, warmup_lr, decay_lr)
     return schedule
 
-def create_train_state(params, learning_rate_schedule):
+def create_model(config):
+    return RWKV(config)
+
+def init_model_variables(model, rwkv_config):
+    key = jax.random.PRNGKey(0)
+    dummy_input = jnp.ones((1, 1), dtype=jnp.int32)
+    dummy_state = RWKV.get_init_state(rwkv_config, 1)
+    variables = model.init(key, dummy_input, dummy_state)
+    return variables
+
+def reinitialize_optimizer_state(tx, params):
+    opt_state = tx.init(params)
+    return opt_state
+
+def reshape_optimizer_state(old_state, new_params):
+    new_state = jax.tree_util.tree_map(
+        lambda old, new: jnp.resize(old, new.shape) if old.shape != new.shape else old,
+        old_state, new_params
+    )
+    return new_state
+
+def create_train_state(model, variables, learning_rate_schedule):
     tx = optax.chain(
-        optax.clip_by_global_norm(GRAD_CLIP_NORM),
-        optax.clip(GRAD_CLIP_VALUE),
+        optax.clip_by_global_norm(config.training.grad_clip_norm),
+        optax.clip(config.training.grad_clip_value),
         optax.adamw(learning_rate_schedule, b1=0.9, b2=0.999, eps=1e-8, weight_decay=0.01)
     )
-    state = train_state.TrainState.create(apply_fn=model.apply, params=params, tx=tx)
-    checkpoint_manager = create_checkpoint_manager(SAVE_PATH)
-    return state, checkpoint_manager
+    return train_state.TrainState.create(
+        apply_fn=model.apply,
+        params=variables['params'],
+        tx=tx
+    )
 
 def save_checkpoint(checkpoint_manager, train_state, step):
     save_args = orbax_utils.save_args_from_target(train_state)
     checkpoint_manager.save(step, train_state, save_kwargs={'save_args': save_args})
-    print(f"Checkpoint saved at step {step}")
+    print(f"\nCheckpoint saved at step {step}\n")
 
 def load_checkpoint(checkpoint_manager, train_state):
     step = checkpoint_manager.latest_step()
     if step is not None:
-        return checkpoint_manager.restore(step, items=train_state), step
+        loaded_state = checkpoint_manager.restore(step, items=train_state)
+        
+        updated_params = jax.tree_util.tree_map(
+            lambda current, loaded: jnp.resize(loaded, current.shape) if current.shape != loaded.shape else loaded,
+            train_state.params,
+            loaded_state.params
+        )
+        
+        new_opt_state = reinitialize_optimizer_state(train_state.tx, updated_params)
+        reshaped_opt_state = reshape_optimizer_state(loaded_state.opt_state, new_opt_state)
+        
+        loaded_state = train_state.replace(params=updated_params, opt_state=reshaped_opt_state)
+        return loaded_state, step
     return None, 0
 
-def init_or_load_model(config, model_path):
-    model = RWKV(config)
-    checkpoint_manager = create_checkpoint_manager(model_path)
-    
-    if checkpoint_manager.latest_step() is not None:
-        print(f"Loading model from {model_path}")
-        dummy_state = create_train_state(model.init(jax.random.PRNGKey(0), jnp.ones((1, 1), dtype=jnp.int32), RWKV.get_init_state(config, 1))['params'], create_learning_rate_schedule())[0]
-        loaded_state = checkpoint_manager.restore(checkpoint_manager.latest_step(), items=dummy_state)
-        return model, loaded_state.params
-    else:
-        print("Creating new model")
-        return model, model.init(jax.random.PRNGKey(0), jnp.ones((1, 1), dtype=jnp.int32), RWKV.get_init_state(config, 1))['params']
+def save_model_weights(params, path):
+    with open(path, 'wb') as f:
+        pickle.dump(params, f)
+    print(f"Model weights saved to {path}")
 
-model, params = init_or_load_model(config, MODEL_PATH)
-
-dataset = MMapIndexedDataset(DATA_PATH)
+dataset = MMapIndexedDataset(config.paths.data_path)
 
 def pad_sequences(sequences, max_len, pad_value=0):
     padded = []
@@ -110,12 +140,12 @@ def create_mask(padded_sequences, max_len):
 
 def compute_loss(logits, labels, mask):
     num_classes = logits.shape[-1]
-    smooth_positives = 1.0 - LABEL_SMOOTHING
-    smooth_negatives = LABEL_SMOOTHING / num_classes
+    smooth_positives = 1.0 - config.training.label_smoothing
+    smooth_negatives = config.training.label_smoothing / num_classes
     onehot_labels = jax.nn.one_hot(labels, num_classes)
     smooth_labels = onehot_labels * smooth_positives + smooth_negatives
-    loss = -jnp.sum(smooth_labels * jax.nn.log_softmax(logits + EPSILON, axis=-1), axis=-1)
-    loss = (loss * mask).sum() / (mask.sum() + EPSILON)
+    loss = -jnp.sum(smooth_labels * jax.nn.log_softmax(logits, axis=-1), axis=-1)
+    loss = (loss * mask).sum() / (mask.sum())
     return loss
 
 @partial(jax.pmap, axis_name='batch')
@@ -123,7 +153,7 @@ def train_step(state, batch, mask, init_state, dropout_rng):
     dropout_rng, new_dropout_rng = jax.random.split(dropout_rng)
     def loss_fn(params):
         logits, new_state = state.apply_fn(
-            params, batch[:, :-1], init_state, 
+            {'params': params}, batch[:, :-1], init_state, 
             deterministic=False, 
             rngs={'dropout': dropout_rng}
         )
@@ -139,75 +169,121 @@ def train_step(state, batch, mask, init_state, dropout_rng):
 
 def train():
     global global_step
+
     total_tokens = len(dataset)
-    tokens_per_step = BATCH_SIZE * SEQ_LEN
+    tokens_per_step = config.training.batch_size * config.training.seq_len
     steps_per_epoch = total_tokens // tokens_per_step
-    total_steps = steps_per_epoch * EPOCHS
-    
+    total_steps = steps_per_epoch * config.training.epochs
     learning_rate_schedule = create_learning_rate_schedule()
-    train_state, checkpoint_manager = create_train_state(params, learning_rate_schedule)
     
-    # Load the latest checkpoint if available
+    model = create_model(rwkv_config)
+    
+    variables = init_model_variables(model, rwkv_config)
+    train_state = create_train_state(model, variables, learning_rate_schedule)
+    checkpoint_manager = create_checkpoint_manager(config.paths.save_path)
+    
     loaded_state, start_step = load_checkpoint(checkpoint_manager, train_state)
     if loaded_state is not None:
         train_state = loaded_state
         global_step = start_step
+        print(f"Loaded checkpoint at step {global_step}")
+    else:
+        if os.path.exists(config.paths.model_path):
+            with open(config.paths.model_path, 'rb') as f:
+                initial_params = pickle.load(f)
+            
+            def reshape_params(loaded, current):
+                if loaded.shape != current.shape:
+                    if len(loaded.shape) > len(current.shape):
+                        slices = tuple(slice(None) for _ in range(len(current.shape)))
+                        loaded = loaded[slices]
+                    return jnp.resize(loaded, current.shape)
+                return loaded
+
+            reshaped_params = jax.tree_util.tree_map(
+                reshape_params,
+                initial_params,
+                train_state.params
+            )
+            
+            train_state = train_state.replace(params=reshaped_params)
+            global_step = 0
+            print("Loaded Pre-trained weights")
+        else:
+            global_step = 0
+            print("No checkpoint or Pre-trained weights found. Starting from scratch.")
+    
+    if global_step >= total_steps:
+        print("Training already completed. Increase epochs if you want to train more.")
+        return
     
     train_state = jax.device_put_replicated(train_state, devices)
 
-    dummy_batch = jnp.ones((num_devices, BATCH_SIZE_PER_DEVICE, SEQ_LEN), dtype=jnp.int32)
-    dummy_mask = jnp.ones((num_devices, BATCH_SIZE_PER_DEVICE, SEQ_LEN), dtype=jnp.int32)
-    dummy_init_state = RWKV.get_init_state(config, BATCH_SIZE_PER_DEVICE)
+    dummy_batch = jnp.ones((num_devices, batch_size_per_device, config.training.seq_len), dtype=jnp.int32)
+    dummy_mask = jnp.ones((num_devices, batch_size_per_device, config.training.seq_len), dtype=jnp.int32)
+    dummy_init_state = RWKV.get_init_state(rwkv_config, batch_size_per_device)
     dummy_init_state = jnp.repeat(dummy_init_state[jnp.newaxis, ...], num_devices, axis=0)
     dropout_rng = jax.random.PRNGKey(0)
     dropout_rng = jax.random.split(dropout_rng, num_devices)
     
     train_state, _, _, _, _, dropout_rng = train_step(train_state, dummy_batch, dummy_mask, dummy_init_state, dropout_rng)
 
-    with tqdm(total=total_steps, desc="Training") as pbar:
-        while global_step < total_steps:
-            rng = jax.random.PRNGKey(global_step)
-            
-            max_start_idx = total_tokens - SEQ_LEN * BATCH_SIZE
-            start_idx = jax.random.randint(rng, (1,), 0, max_start_idx)[0]
-            sequences = [dataset[start_idx + i*SEQ_LEN : start_idx + (i+1)*SEQ_LEN] for i in range(BATCH_SIZE)]
+    start_epoch = global_step // steps_per_epoch
+    for epoch in range(start_epoch, config.training.epochs):
+        epoch_loss = 0
+        epoch_max_grad = 0
+        with tqdm(total=steps_per_epoch, initial=global_step % steps_per_epoch, 
+                  desc=f"Training (Epoch {epoch + 1}/{config.training.epochs})") as pbar:
+            for step in range(global_step % steps_per_epoch, steps_per_epoch):
+                rng = jax.random.PRNGKey(global_step)
+                
+                max_start_idx = total_tokens - config.training.seq_len * config.training.batch_size
+                start_idx = jax.random.randint(rng, (1,), 0, max_start_idx)[0]
+                sequences = [dataset[start_idx + i*config.training.seq_len : start_idx + (i+1)*config.training.seq_len] for i in range(config.training.batch_size)]
 
-            padded_sequences = pad_sequences(sequences, SEQ_LEN)
-            mask = create_mask(padded_sequences, SEQ_LEN)
+                padded_sequences = pad_sequences(sequences, config.training.seq_len)
+                mask = create_mask(padded_sequences, config.training.seq_len)
 
-            padded_sequences = padded_sequences.reshape(num_devices, BATCH_SIZE_PER_DEVICE, SEQ_LEN)
-            mask = mask.reshape(num_devices, BATCH_SIZE_PER_DEVICE, SEQ_LEN)
+                padded_sequences = padded_sequences.reshape(num_devices, batch_size_per_device, config.training.seq_len)
+                mask = mask.reshape(num_devices, batch_size_per_device, config.training.seq_len)
 
-            padded_sequences, mask = jnp.array(padded_sequences), jnp.array(mask)
+                padded_sequences, mask = jnp.array(padded_sequences), jnp.array(mask)
 
-            init_state = RWKV.get_init_state(config, BATCH_SIZE_PER_DEVICE)
-            init_state = jnp.repeat(init_state[jnp.newaxis, ...], num_devices, axis=0)
+                init_state = RWKV.get_init_state(rwkv_config, batch_size_per_device)
+                init_state = jnp.repeat(init_state[jnp.newaxis, ...], num_devices, axis=0)
 
-            train_state, loss, _, max_grad, is_nan, dropout_rng = train_step(
-                train_state, padded_sequences, mask, init_state, dropout_rng
-            )
+                train_state, loss, _, max_grad, is_nan, dropout_rng = train_step(
+                    train_state, padded_sequences, mask, init_state, dropout_rng
+                )
 
-            global_step += 1
-            pbar.update(1)
-
-            if global_step % 100 == 0:
                 loss = jax.device_get(loss)
-                mean_loss, max_grad = np.mean(loss), np.max(jax.device_get(max_grad))
+                max_grad = jax.device_get(max_grad)
+                epoch_loss += np.mean(loss)
+                epoch_max_grad = max(epoch_max_grad, np.max(max_grad))
+
                 is_nan = jax.device_get(is_nan)
                 if np.any(is_nan):
                     print(f"\nWarning: NaN detected at step {global_step}")
-                elif np.isinf(mean_loss):
+                elif np.isinf(np.mean(loss)):
                     print(f"\nWarning: Inf loss detected at step {global_step}")
-                else:
-                    print(f"\nStep {global_step}/{total_steps}, Loss: {mean_loss:.4f}, Max gradient: {max_grad:.4f}")
 
-            if global_step % SAVE_EVERY == 0:
-                save_checkpoint(checkpoint_manager, jax.device_get(train_state), global_step)
+                global_step += 1
+                pbar.update(1)
 
-            current_epoch = global_step // steps_per_epoch
-            pbar.set_description(f"Training (Epoch {current_epoch+1}/{EPOCHS})")
+                if config.checkpoint.save_every_steps > 0 and global_step % config.checkpoint.save_every_steps == 0:
+                    save_checkpoint(checkpoint_manager, jax.device_get(train_state), global_step)
 
+        avg_epoch_loss = epoch_loss / steps_per_epoch
+        print(f"Avg Loss: {avg_epoch_loss:.4f}, Max grad: {epoch_max_grad:.4f}")
+
+        if config.checkpoint.save_every_epochs > 0 and (epoch + 1) % config.checkpoint.save_every_epochs == 0:
+            save_checkpoint(checkpoint_manager, jax.device_get(train_state), global_step)
+
+    print("Training completed.")
     save_checkpoint(checkpoint_manager, jax.device_get(train_state), global_step)
+    
+    final_params = jax.device_get(train_state.params)
+    save_model_weights(final_params, config.paths.model_path)
 
 if __name__ == "__main__":
     train()
