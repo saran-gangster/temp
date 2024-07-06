@@ -58,7 +58,7 @@ class RWKVBlock(nn.Module):
         def init_time_maa(name, ratio):
             def init(key, shape):
                 return 1.0 - jnp.power((jnp.arange(args.n_embd) / args.n_embd), ratio).reshape(1, 1, -1)
-            return self.param(name, init, (1, 1, args.n_embd))
+            return self.param(f'blocks.{self.layer_id}.att.{name}', init, (1, 1, args.n_embd))
 
         self.time_maa_x = init_time_maa('time_maa_x', ratio_1_to_almost0)
         self.time_maa_w = init_time_maa('time_maa_w', ratio_1_to_almost0)
@@ -69,34 +69,37 @@ class RWKVBlock(nn.Module):
 
         def init_time_decay(key, shape):
             return (-6 + 5 * (jnp.arange(args.dim_att) / (args.dim_att - 1)) ** (0.7 + 1.3 * ratio_0_to_1))
-        self.time_decay = self.param('time_decay', init_time_decay, (1, args.dim_att))
+        self.time_decay = self.param(f'blocks.{self.layer_id}.att.time_decay', init_time_decay, (1, args.dim_att))
 
         def init_time_faaaa(key, shape):
             n = jnp.arange(args.dim_att)
             return (ratio_0_to_1 * (1 - (n / max(args.dim_att - 1, 1))) + ((n + 1) % 3 - 1) * 0.1).reshape((self.n_head, -1))
-        self.time_faaaa = self.param('time_faaaa', init_time_faaaa, (self.n_head, self.head_size))
+        self.time_faaaa = self.param(f'blocks.{self.layer_id}.att.time_faaaa', init_time_faaaa, (self.n_head, self.head_size))
 
-        self.time_maa_w1 = self.param('time_maa_w1', nn.initializers.uniform(1e-4), (args.n_embd, 5*32))
-        self.time_maa_w2 = self.param('time_maa_w2', nn.initializers.uniform(1e-4), (5, 32, args.n_embd))
-        self.time_decay_w1 = self.param('time_decay_w1', nn.initializers.uniform(1e-4), (args.n_embd, 64))
-        self.time_decay_w2 = self.param('time_decay_w2', nn.initializers.uniform(1e-4), (64, args.n_embd))
+        self.time_maa_w1 = self.param(f'blocks.{self.layer_id}.att.time_maa_w1', nn.initializers.uniform(1e-4), (args.n_embd, 5*32))
+        self.time_maa_w2 = self.param(f'blocks.{self.layer_id}.att.time_maa_w2', nn.initializers.uniform(1e-4), (5, 32, args.n_embd))
+        self.time_decay_w1 = self.param(f'blocks.{self.layer_id}.att.time_decay_w1', nn.initializers.uniform(1e-4), (args.n_embd, 64))
+        self.time_decay_w2 = self.param(f'blocks.{self.layer_id}.att.time_decay_w2', nn.initializers.uniform(1e-4), (64, args.n_embd))
 
-        self.receptance = nn.Dense(args.dim_att, use_bias=False)
-        self.key = nn.Dense(args.dim_att, use_bias=False)
-        self.value = nn.Dense(args.dim_att, use_bias=False)
-        self.output = nn.Dense(args.n_embd, use_bias=False)
-        self.gate = nn.Dense(args.dim_att, use_bias=False)
-        self.ln_x = GroupNorm(num_groups=self.n_head)
+        self.receptance = nn.Dense(args.dim_att, use_bias=False, name=f'blocks.{self.layer_id}.att.receptance')
+        self.key = nn.Dense(args.dim_att, use_bias=False, name=f'blocks.{self.layer_id}.att.key')
+        self.value = nn.Dense(args.dim_att, use_bias=False, name=f'blocks.{self.layer_id}.att.value')
+        self.output = nn.Dense(args.n_embd, use_bias=False, name=f'blocks.{self.layer_id}.att.output')
+        self.gate = nn.Dense(args.dim_att, use_bias=False, name=f'blocks.{self.layer_id}.att.gate')
+        self.ln_x = GroupNorm(num_groups=self.n_head, name=f'blocks.{self.layer_id}.att.ln_x')
 
-        self.time_maa_k_channel = init_time_maa('time_maa_k_channel', ratio_1_to_almost0)
-        self.time_maa_r_channel = init_time_maa('time_maa_r_channel', ratio_1_to_almost0)
+        self.time_maa_k_channel = init_time_maa(f'blocks.{self.layer_id}.ffn.time_maa_k', ratio_1_to_almost0)
+        self.time_maa_r_channel = init_time_maa(f'blocks.{self.layer_id}.ffn.time_maa_r', ratio_1_to_almost0)
 
-        self.key_channel = nn.Dense(args.dim_ffn, use_bias=False)
-        self.receptance_channel = nn.Dense(args.n_embd, use_bias=False)
-        self.value_channel = nn.Dense(args.n_embd, use_bias=False)
+        self.key_channel = nn.Dense(args.dim_ffn, use_bias=False, name=f'blocks.{self.layer_id}.ffn.key')
+        self.receptance_channel = nn.Dense(args.n_embd, use_bias=False, name=f'blocks.{self.layer_id}.ffn.receptance')
+        self.value_channel = nn.Dense(args.n_embd, use_bias=False, name=f'blocks.{self.layer_id}.ffn.value')
 
-        self.ln1 = nn.LayerNorm(epsilon=self.config.layer_norm_epsilon)
-        self.ln2 = nn.LayerNorm(epsilon=self.config.layer_norm_epsilon)
+        self.ln1 = nn.LayerNorm(epsilon=self.config.layer_norm_epsilon, name=f'blocks.{self.layer_id}.ln1')
+        self.ln2 = nn.LayerNorm(epsilon=self.config.layer_norm_epsilon, name=f'blocks.{self.layer_id}.ln2')
+
+        if self.layer_id == 0:
+            self.ln0 = nn.LayerNorm(epsilon=self.config.layer_norm_epsilon, name='blocks.0.ln0')
 
         self.dropout = nn.Dropout(rate=self.config.dropout)
 
@@ -223,7 +226,8 @@ class RWKV(nn.Module):
         
         x = nn.Embed(num_embeddings=self.config.vocab_size, 
                      features=self.config.n_embd,
-                     embedding_init=nn.initializers.normal(stddev=0.01))(idx)
+                     embedding_init=nn.initializers.normal(stddev=0.01),
+                     name='emb')(idx)
 
         new_states = []
         for i in range(self.config.n_layer):
@@ -231,8 +235,8 @@ class RWKV(nn.Module):
             x, new_state = block(x, state[:, i], deterministic=deterministic, rngs=rngs)
             new_states.append(new_state)
 
-        x = nn.LayerNorm(epsilon=self.config.layer_norm_epsilon)(x)
-        x = nn.Dense(self.config.vocab_size, use_bias=False)(x)
+        x = nn.LayerNorm(epsilon=self.config.layer_norm_epsilon, name='ln_out')(x)
+        x = nn.Dense(self.config.vocab_size, use_bias=False, name='head')(x)
 
         new_states = jnp.stack(new_states, axis=1)
         return x, new_states
@@ -263,7 +267,7 @@ def model_forward(model, params, idx, state, deterministic=False):
 
 if __name__ == "__main__":
     config = RWKVConfig(
-        vocab_size=10000,
+        vocab_size=50277,
         n_layer=12,
         n_embd=768,
         dim_att=768,
@@ -280,6 +284,11 @@ if __name__ == "__main__":
 
     model, params = create_model(config)
 
+    # Print out the structure and shapes of the parameters
+    flat_params = jax.tree_util.tree_flatten(params)[0]
+    for param in flat_params:
+        print(f"{str(param.shape).ljust(20)} {param.name}")
+
     batch_size = 4
     seq_length = 64
     dummy_input = jnp.ones((batch_size, seq_length), dtype=jnp.int32)
@@ -287,5 +296,5 @@ if __name__ == "__main__":
 
     output, new_state = model_forward(model, params, dummy_input, dummy_state)
 
-    print(f"Output shape: {output.shape}")
+    print(f"\nOutput shape: {output.shape}")
     print(f"New state shape: {new_state.shape}")
