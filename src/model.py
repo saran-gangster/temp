@@ -285,9 +285,14 @@ if __name__ == "__main__":
     model, params = create_model(config)
 
     # Print out the structure and shapes of the parameters
-    flat_params = jax.tree_util.tree_flatten(params)[0]
-    for param in flat_params:
-        print(f"{str(param.shape).ljust(20)} {param.name}")
+    def print_params(params, prefix=''):
+        for key, value in params.items():
+            if isinstance(value, dict):
+                print_params(value, prefix + key + '.')
+            else:
+                print(f"{str(value.shape).ljust(20)} {prefix + key}")
+
+    print_params(params)
 
     batch_size = 4
     seq_length = 64
