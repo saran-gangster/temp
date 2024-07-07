@@ -284,7 +284,6 @@ if __name__ == "__main__":
 
     model, params = create_model(config)
 
-    # Print out the structure and shapes of the parameters
     def print_params(params, prefix=''):
         for key, value in params.items():
             if isinstance(value, dict):
