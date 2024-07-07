@@ -257,7 +257,7 @@ def create_model(config):
     with jax.disable_jit():
         params = model.init(rngs, dummy_input, dummy_state, deterministic=False)
     
-    print(model.tabulate(rngs, dummy_input, dummy_state, deterministic=False, console_kwargs={'width': 120}))
+    # print(model.tabulate(rngs, dummy_input, dummy_state, deterministic=False, console_kwargs={'width': 120}))
     
     return model, params
 
