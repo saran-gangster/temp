@@ -41,9 +41,9 @@ def load_pretrained_weights(model_path, model):
     return reshaped_params
 
 @partial(jax.jit, static_argnums=(0, 1))
-def infer_single_token(model, params, token, state):
+def infer_single_token(model, config, params, token, state):
     token_array = jnp.array([[token]])
-    logits, new_state = model.apply({'params': params}, token_array, state)
+    logits, new_state = model.apply({'params': params}, token_array, state, rngs={'dropout': jax.random.PRNGKey(0)})
     return logits[0, 0], new_state
 
 def generate_text(model, params, config, tokenizer, initial_prompt, max_length=100, temperature=0.8):
@@ -52,13 +52,13 @@ def generate_text(model, params, config, tokenizer, initial_prompt, max_length=1
     generated_tokens = []
     
     for token in tokens:
-        logits, state = infer_single_token(model, params, token, state)
+        logits, state = infer_single_token(model, config, params, token, state)
     
     for _ in range(max_length):
         logits /= temperature
         token = jax.random.categorical(jax.random.PRNGKey(int.from_bytes(os.urandom(4), byteorder='little')), logits)
         generated_tokens.append(token.item())
-        logits, state = infer_single_token(model, params, token.item(), state)
+        logits, state = infer_single_token(model, config, params, token.item(), state)
     
     generated_text = tokenizer.decode([tokens + generated_tokens])[0]
     return generated_text
