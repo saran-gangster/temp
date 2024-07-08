@@ -21,14 +21,14 @@ training:
   decay_steps: 10000                          # Steps to decay from max to init lr
   batch_size: 32                              # Sequences per batch
   seq_len: 512                                # Ctx length
-  epochs: 5                     
+  epochs: 15                     
   grad_clip_norm: 0.5           
   grad_clip_value: 0.5         
   label_smoothing: 0.1                        # Factor for smoothing target distributions
 
 checkpoint:
   save_every_steps: 10000                     # Put zero if you don't want to
-  save_every_epochs: 2                        # Put zero if you don't want to
+  save_every_epochs: 0                        # Put zero if you don't want to
   max_checkpoints_to_keep: 2   
 
 paths:
