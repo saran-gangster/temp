@@ -2,16 +2,16 @@ import os
 import pickle
 import yaml
 import jax
-import jax.numpy as jnp
 import optax
+import orbax
 from flax.training import train_state
+import jax.numpy as jnp
 import numpy as np
 from tqdm import tqdm
 from functools import partial
 from src.model import RWKV, RWKVConfig
 from src.tokenizer import RWKVTokenizer
 from src.binidx import MMapIndexedDataset
-import orbax.checkpoint
 from flax.training import orbax_utils
 
 class DotDict(dict):
@@ -160,7 +160,7 @@ def train_step(state, batch, mask, init_state, dropout_rng):
         loss = compute_loss(logits, batch[:, 1:], mask[:, 1:])
         return loss, (logits, new_state)
     grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
-    (loss, (logits, new_state)), grads = grad_fn(state.params)
+    (loss, (_, new_state)), grads = grad_fn(state.params)
     grads = jax.tree_util.tree_map(lambda g: jnp.where(jnp.isnan(g), jnp.zeros_like(g), g), grads)
     grads = jax.lax.pmean(grads, axis_name='batch')
     new_state = state.apply_gradients(grads=grads)
@@ -258,8 +258,8 @@ def train():
 
                 loss = jax.device_get(loss)
                 max_grad = jax.device_get(max_grad)
-                epoch_loss += np.mean(loss)
-                epoch_max_grad = max(epoch_max_grad, np.max(max_grad))
+                epoch_loss += jnp.mean(loss)
+                epoch_max_grad = max(epoch_max_grad, jnp.max(max_grad))
 
                 is_nan = jax.device_get(is_nan)
                 if np.any(is_nan):
