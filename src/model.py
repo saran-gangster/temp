@@ -2,7 +2,6 @@ import jax
 import jax.numpy as jnp
 from jax import random, nn as jnn
 import flax.linen as nn
-from typing import Any
 from functools import partial
 from dataclasses import dataclass
 
@@ -52,7 +51,7 @@ class RWKVBlock(nn.Module):
         self.min_clamp = args.min_clamp
         assert args.dim_att % self.n_head == 0
 
-        ratio_0_to_1 = self.layer_id / (args.n_layer - 1)
+        ratio_0_to_1 = self.layer_id / ((2 if args.n_layer==1 else args.n_layer) - 1)
         ratio_1_to_almost0 = 1.0 - (self.layer_id / args.n_layer)
 
         def init_time_maa(name, ratio):
@@ -257,7 +256,7 @@ def create_model(config):
     with jax.disable_jit():
         params = model.init(rngs, dummy_input, dummy_state, deterministic=False)
     
-    # print(model.tabulate(rngs, dummy_input, dummy_state, deterministic=False, console_kwargs={'width': 120}))
+    print(model.tabulate(rngs, dummy_input, dummy_state, deterministic=False, console_kwargs={'width': 80}))
     
     return model, params
 
@@ -266,14 +265,15 @@ def model_forward(model, params, idx, state, deterministic=False):
     return model.apply(params, idx, state, deterministic=deterministic, rngs={'dropout': random.PRNGKey(0)})
 
 if __name__ == "__main__":
+    ### Sample USAGE
     config = RWKVConfig(
         vocab_size=50277,
-        n_layer=12,
-        n_embd=768,
-        dim_att=768,
-        dim_ffn=3072,
-        head_size_a=64,
-        n_head=12,
+        n_layer=1,
+        n_embd=128,
+        dim_att=128,
+        dim_ffn=512,
+        head_size_a=32,
+        n_head=4,
         head_size_divisor=8,
         dropout=0.1,
         layer_norm_epsilon=1e-5,
@@ -284,14 +284,14 @@ if __name__ == "__main__":
 
     model, params = create_model(config)
 
-    def print_params(params, prefix=''):
-        for key, value in params.items():
-            if isinstance(value, dict):
-                print_params(value, prefix + key + '.')
-            else:
-                print(f"{str(value.shape).ljust(20)} {prefix + key}")
+    # def print_params(params, prefix=''):
+    #     for key, value in params.items():
+    #         if isinstance(value, dict):
+    #             print_params(value, prefix + key + '.')
+    #         else:
+    #             print(f"{str(value.shape).ljust(20)} {prefix + key}")
 
-    print_params(params)
+    # print_params(params)
 
     batch_size = 4
     seq_length = 64
